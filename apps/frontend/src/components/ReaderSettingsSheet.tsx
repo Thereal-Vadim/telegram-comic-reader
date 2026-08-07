@@ -9,10 +9,11 @@ import {
 import { useHaptics } from '../telegram/hooks';
 
 /**
- * Reader settings sheet — same visual language as the rest of the Mini App.
+ * Reader settings sheet.
  *
- * Uses Telegram theme tokens (`tg-bg`, `tg-secondary-bg`, `tg-button`, …),
- * `rounded-xl` panels, and uppercase section labels — not an iOS Books clone.
+ * Surface is fixed pure white so Telegram’s warm light `bg_color` cannot tint
+ * the panel beige. Inner cards use cool neutrals; text stays dark for contrast
+ * in both Telegram light and dark client themes.
  */
 
 export interface ReaderSettingsSheetProps {
@@ -54,38 +55,37 @@ export function ReaderSettingsSheet({
       <button
         type="button"
         aria-label="Dismiss settings"
-        className="absolute inset-0 bg-black/50"
+        className="absolute inset-0 bg-black/40"
         onClick={() => {
           impact('soft');
           onClose();
         }}
       />
 
-      <div className="pointer-events-auto relative max-h-[80%] overflow-y-auto rounded-t-2xl border-t border-white/10 bg-tg-bg/95 pb-safe shadow-[0_-8px_32px_rgba(0,0,0,0.45)] backdrop-blur supports-[backdrop-filter]:bg-tg-bg/90">
-        <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/5 bg-tg-bg/95 px-4 py-3 backdrop-blur">
+      <div className="pointer-events-auto relative max-h-[80%] overflow-y-auto rounded-t-2xl border-t border-neutral-200 bg-white pb-safe shadow-[0_-8px_32px_rgba(0,0,0,0.25)]">
+        <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-neutral-100 bg-white px-4 py-3">
           <button
             type="button"
             onClick={() => {
               impact('light');
               onClose();
             }}
-            className="rounded-lg bg-tg-secondary-bg px-3 py-1.5 text-sm font-medium text-tg-text"
+            className="rounded-lg bg-neutral-100 px-3 py-1.5 text-sm font-medium text-neutral-900"
           >
             Close
           </button>
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-bold text-tg-text">Reading settings</h2>
-            <p className="truncate text-[11px] text-tg-hint">Scale, turn style, and paper</p>
+            <h2 className="truncate text-sm font-bold text-neutral-900">Reading settings</h2>
+            <p className="truncate text-[11px] text-neutral-500">Scale, turn style, and paper</p>
           </div>
         </header>
 
         <div className="space-y-6 px-4 py-4">
-          {/* Scale */}
           <section>
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">
               Scale
             </h3>
-            <div className="mt-2 flex items-center gap-2 rounded-xl bg-tg-secondary-bg p-2">
+            <div className="mt-2 flex items-center gap-2 rounded-xl bg-neutral-100 p-2">
               <button
                 type="button"
                 aria-label="Zoom out"
@@ -94,15 +94,15 @@ export function ReaderSettingsSheet({
                   impact('soft');
                   onNudgeScale(-0.35);
                 }}
-                className="rounded-lg bg-black/25 px-4 py-2.5 text-sm font-semibold text-tg-text disabled:opacity-40"
+                className="rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-neutral-900 shadow-sm disabled:opacity-40"
               >
                 −
               </button>
               <div className="min-w-0 flex-1 text-center">
-                <p className="tabular-nums text-sm font-semibold text-tg-text">
+                <p className="tabular-nums text-sm font-semibold text-neutral-900">
                   {Math.round(scale * 100)}%
                 </p>
-                <p className="text-[11px] text-tg-hint">Pinch or double-tap also zooms</p>
+                <p className="text-[11px] text-neutral-500">Pinch or double-tap also zooms</p>
               </div>
               <button
                 type="button"
@@ -112,16 +112,15 @@ export function ReaderSettingsSheet({
                   impact('soft');
                   onNudgeScale(0.35);
                 }}
-                className="rounded-lg bg-black/25 px-4 py-2.5 text-sm font-semibold text-tg-text disabled:opacity-40"
+                className="rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-neutral-900 shadow-sm disabled:opacity-40"
               >
                 +
               </button>
             </div>
           </section>
 
-          {/* Page animation */}
           <section>
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">
               Page turn
             </h3>
             <button
@@ -130,24 +129,26 @@ export function ReaderSettingsSheet({
                 impact('soft');
                 setAnimOpen((v) => !v);
               }}
-              className="mt-2 flex w-full items-center gap-3 rounded-xl bg-tg-secondary-bg px-3 py-3 text-left"
+              className="mt-2 flex w-full items-center gap-3 rounded-xl bg-neutral-100 px-3 py-3 text-left"
             >
-              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/25 text-tg-link">
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-white text-tg-button shadow-sm">
                 <AnimationIcon id={pageAnimation} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium text-tg-text">
+                <span className="block text-sm font-medium text-neutral-900">
                   {animMeta?.label ?? 'Curl'}
                 </span>
-                <span className="block text-xs text-tg-hint">
+                <span className="block text-xs text-neutral-500">
                   {animMeta?.description ?? 'Page animation'}
                 </span>
               </span>
-              <span className="text-xs text-tg-link">{animOpen ? 'Hide' : 'Change'}</span>
+              <span className="text-xs font-medium text-tg-button">
+                {animOpen ? 'Hide' : 'Change'}
+              </span>
             </button>
 
             {animOpen && (
-              <ul className="mt-2 overflow-hidden rounded-xl bg-tg-secondary-bg">
+              <ul className="mt-2 overflow-hidden rounded-xl bg-neutral-100">
                 {PAGE_ANIMATIONS.map((anim, i) => {
                   const selected = pageAnimation === anim.id;
                   return (
@@ -160,20 +161,20 @@ export function ReaderSettingsSheet({
                           setAnimOpen(false);
                         }}
                         className={`flex w-full items-center gap-3 px-3 py-3 text-left ${
-                          i > 0 ? 'border-t border-white/5' : ''
-                        } ${selected ? 'bg-tg-button/15' : ''}`}
+                          i > 0 ? 'border-t border-neutral-200/80' : ''
+                        } ${selected ? 'bg-tg-button/10' : ''}`}
                       >
-                        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/25 text-tg-text">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-neutral-900 shadow-sm">
                           <AnimationIcon id={anim.id} />
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium text-tg-text">
+                          <span className="block text-sm font-medium text-neutral-900">
                             {anim.label}
                           </span>
-                          <span className="block text-xs text-tg-hint">{anim.description}</span>
+                          <span className="block text-xs text-neutral-500">{anim.description}</span>
                         </span>
                         {selected && (
-                          <span className="text-xs font-semibold text-tg-link">On</span>
+                          <span className="text-xs font-semibold text-tg-button">On</span>
                         )}
                       </button>
                     </li>
@@ -183,9 +184,8 @@ export function ReaderSettingsSheet({
             )}
           </section>
 
-          {/* Paper / ambient themes */}
           <section>
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">
               Background
             </h3>
             <div className="mt-2 grid grid-cols-3 gap-2">
@@ -201,8 +201,8 @@ export function ReaderSettingsSheet({
                     }}
                     className={`overflow-hidden rounded-xl text-left transition-shadow ${
                       selected
-                        ? 'ring-2 ring-tg-button ring-offset-2 ring-offset-tg-bg'
-                        : 'ring-1 ring-white/10'
+                        ? 'ring-2 ring-neutral-900 ring-offset-2 ring-offset-white'
+                        : 'ring-1 ring-neutral-200'
                     }`}
                   >
                     <span
@@ -216,7 +216,7 @@ export function ReaderSettingsSheet({
                         Aa
                       </span>
                     </span>
-                    <span className="block bg-tg-secondary-bg px-2.5 py-1.5 text-[11px] font-medium text-tg-text">
+                    <span className="block bg-neutral-50 px-2.5 py-1.5 text-[11px] font-medium text-neutral-900">
                       {preset.label}
                     </span>
                   </button>
@@ -225,16 +225,15 @@ export function ReaderSettingsSheet({
             </div>
           </section>
 
-          {/* Page scrubber */}
           {pageCount > 1 && (
             <section>
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">
                 Jump to page
               </h3>
-              <div className="mt-2 rounded-xl bg-tg-secondary-bg px-3 py-3">
+              <div className="mt-2 rounded-xl bg-neutral-100 px-3 py-3">
                 <div className="mb-2 flex items-baseline justify-between text-xs">
-                  <span className="text-tg-hint">Page</span>
-                  <span className="tabular-nums font-medium text-tg-text">
+                  <span className="text-neutral-500">Page</span>
+                  <span className="tabular-nums font-medium text-neutral-900">
                     {pageIndex + 1} / {pageCount}
                   </span>
                 </div>
