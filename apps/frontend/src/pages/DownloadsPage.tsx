@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { CoverImage } from '../components/CoverImage';
 import { EmptyState } from '../components/states';
-import type { DownloadTask } from '../db/schema';
+import type { DownloadTask, StoredChapter } from '../db/schema';
 import {
+  deleteChapterPages,
   deleteComic,
   getStorageStatus,
   requestPersistence,
@@ -14,27 +16,30 @@ import { useClosingConfirmation, useHaptics } from '../telegram/hooks';
 import { getWebApp } from '../telegram/webapp';
 
 /**
- * Download queue and storage management.
+ * Downloaded files on this device — the offline library.
  *
- * The foreground-only caveat is stated plainly here rather than buried. A
- * reader that appears to download in the background and silently stops when
- * the user switches chats is worse than one that says what it does, and
- * Telegram gives no way to keep a Mini App's JavaScript alive once it is
- * backgrounded.
+ * Only chapters that finished downloading appear here. Opening one always
+ * reads from IndexedDB blobs (no network). The active queue sits above the
+ * list while transfers run (they only progress while the Mini App is open).
  */
+
+interface DownloadedIssue {
+  chapter: StoredChapter;
+  comicTitle: string;
+  coverUrl: string | null;
+}
+
 export function DownloadsPage(): React.JSX.Element {
+  const navigate = useNavigate();
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
-  const [comics, setComics] = useState<{ id: string; title: string; bytes: number }[]>([]);
+  const [issues, setIssues] = useState<DownloadedIssue[]>([]);
   const { impact, notify } = useHaptics();
   const prevStatuses = useRef(new Map<number, DownloadTask['status']>());
 
   const active = tasks.some((t) => t.status === 'running' || t.status === 'queued');
-  // Warn before closing while a transfer is live, since closing suspends it.
   useClosingConfirmation(active);
 
-  // Buzz when a live transfer finishes — only on a status transition, so
-  // remounting the page over already-done tasks does not vibrate.
   useEffect(() => {
     for (const task of tasks) {
       if (task.id === undefined) continue;
@@ -48,21 +53,24 @@ export function DownloadsPage(): React.JSX.Element {
   const refresh = useCallback(async () => {
     setStorage(await getStorageStatus());
 
-    // Group downloaded bytes by comic for the storage breakdown.
-    const chapters = await db.chapters.filter((c) => c.downloadedAt !== undefined).toArray();
-    const byComic = new Map<string, number>();
-    for (const c of chapters) {
-      byComic.set(c.comicId, (byComic.get(c.comicId) ?? 0) + (c.bytes ?? 0));
-    }
+    const chapters = await db.chapters
+      .filter((c) => c.downloadedAt !== undefined)
+      .toArray();
+
+    // Newest downloads first.
+    chapters.sort((a, b) => (b.downloadedAt ?? 0) - (a.downloadedAt ?? 0));
 
     const rows = await Promise.all(
-      [...byComic.entries()].map(async ([comicId, bytes]) => ({
-        id: comicId,
-        title: (await db.comics.get(comicId))?.title ?? comicId,
-        bytes,
-      })),
+      chapters.map(async (chapter) => {
+        const comic = await db.comics.get(chapter.comicId);
+        return {
+          chapter,
+          comicTitle: comic?.title ?? chapter.comicId,
+          coverUrl: chapter.coverUrl ?? comic?.coverUrl ?? null,
+        };
+      }),
     );
-    setComics(rows.sort((a, b) => b.bytes - a.bytes));
+    setIssues(rows);
   }, []);
 
   useEffect(() => downloads.subscribe(setTasks), []);
@@ -75,15 +83,36 @@ export function DownloadsPage(): React.JSX.Element {
     getWebApp().showAlert(
       granted
         ? 'Downloads are now protected from automatic cleanup.'
-        : 'The browser declined. Downloads may be cleared if the device runs low on space. ' +
-            'Using the app more often usually makes the browser grant this.',
+        : 'The browser declined. Downloads may be cleared if the device runs low on space.',
     );
     await refresh();
   }, [refresh]);
 
-  const removeComic = useCallback(
+  const openOffline = useCallback(
+    (chapter: StoredChapter) => {
+      impact('medium');
+      // Reader prefers IndexedDB blobs when downloadedAt is set.
+      void navigate(`/read/${encodeURIComponent(chapter.id)}?page=0`);
+    },
+    [impact, navigate],
+  );
+
+  const removeIssue = useCallback(
+    async (chapter: StoredChapter) => {
+      getWebApp().showConfirm(`Remove offline copy of "${chapter.title}"?`, (ok) => {
+        if (!ok) return;
+        void deleteChapterPages(chapter.id).then(() => {
+          impact('medium');
+          void refresh();
+        });
+      });
+    },
+    [impact, refresh],
+  );
+
+  const removeAllForComic = useCallback(
     async (comicId: string, title: string) => {
-      getWebApp().showConfirm(`Remove all downloaded chapters of "${title}"?`, (ok) => {
+      getWebApp().showConfirm(`Remove all downloaded issues of "${title}"?`, (ok) => {
         if (!ok) return;
         void deleteComic(comicId).then(() => {
           impact('medium');
@@ -98,64 +127,150 @@ export function DownloadsPage(): React.JSX.Element {
 
   return (
     <div className="px-4 pb-24 pt-4">
-      <h1 className="text-lg font-bold text-tg-text">Downloads</h1>
+      <header className="mb-2">
+        <h1 className="text-lg font-bold text-tg-text">Downloaded</h1>
+        <p className="mt-1 text-sm text-tg-hint">
+          Issues saved on this phone. They open without the internet.
+        </p>
+      </header>
 
       {storage && <StorageSummary storage={storage} onEnablePersistence={enablePersistence} />}
 
-      <section className="mt-6">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">Queue</h2>
-
-        {activeTasks.length === 0 ? (
-          <EmptyState
-            title="Nothing downloading"
-            description="Save a chapter from a comic's page to read it without a connection."
-          />
-        ) : (
-          <>
-            <p className="mt-2 rounded-lg bg-tg-secondary-bg px-3 py-2 text-xs text-tg-hint">
-              Downloads only run while this app is open. Telegram pauses it when you switch
-              away, and it resumes from where it stopped when you come back.
-            </p>
-
-            <ul className="mt-3 space-y-3">
-              {activeTasks.map((task) => (
-                <QueueRow key={task.id} task={task} />
-              ))}
-            </ul>
-          </>
-        )}
-      </section>
-
-      {comics.length > 0 && (
-        <section className="mt-8">
+      {activeTasks.length > 0 && (
+        <section className="mt-6">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
-            Stored on this device
+            Downloading now
           </h2>
-          <ul className="mt-2 divide-y divide-white/5">
-            {comics.map((comic) => (
-              <li key={comic.id} className="flex items-center gap-3 py-3">
-                <Link
-                  to={`/comic/${encodeURIComponent(comic.id)}`}
-                  className="min-w-0 flex-1 truncate text-sm text-tg-text"
-                >
-                  {comic.title}
-                </Link>
-                <span className="shrink-0 text-xs tabular-nums text-tg-hint">
-                  {formatBytes(comic.bytes)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void removeComic(comic.id, comic.title)}
-                  className="shrink-0 rounded-lg bg-tg-secondary-bg px-3 py-1.5 text-xs text-tg-destructive"
-                >
-                  Remove
-                </button>
-              </li>
+          <p className="mt-2 rounded-lg bg-tg-secondary-bg px-3 py-2 text-xs text-tg-hint">
+            Keep the Mini App open — Telegram pauses downloads when you switch away.
+          </p>
+          <ul className="mt-3 space-y-3">
+            {activeTasks.map((task) => (
+              <QueueRow key={task.id} task={task} />
             ))}
           </ul>
         </section>
       )}
+
+      <section className="mt-6">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+          On this device
+          {issues.length > 0 ? ` · ${issues.length}` : ''}
+        </h2>
+
+        {issues.length === 0 ? (
+          <EmptyState
+            title="Nothing downloaded yet"
+            description="Open a comic, pick an issue, tap Download. Finished issues appear here and work offline."
+          />
+        ) : (
+          <ul className="mt-3 space-y-3">
+            {issues.map(({ chapter, comicTitle, coverUrl }) => (
+              <li
+                key={chapter.id}
+                className="flex gap-3 rounded-xl bg-tg-secondary-bg p-3"
+              >
+                <button
+                  type="button"
+                  onClick={() => openOffline(chapter)}
+                  className="w-16 shrink-0 text-left"
+                >
+                  <CoverImage src={coverUrl} alt={chapter.title} className="w-full" />
+                </button>
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => openOffline(chapter)}
+                    className="w-full text-left"
+                  >
+                    <p className="truncate text-sm font-medium text-tg-text">{chapter.title}</p>
+                    <p className="mt-0.5 truncate text-xs text-tg-hint">{comicTitle}</p>
+                    <p className="mt-1 text-[11px] text-tg-subtitle">
+                      {chapter.pageCount > 0 ? `${chapter.pageCount} pages` : 'Offline'}
+                      {chapter.bytes ? ` · ${formatBytes(chapter.bytes)}` : ''}
+                      {' · Offline'}
+                    </p>
+                  </button>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openOffline(chapter)}
+                      className="rounded-lg bg-tg-button px-3 py-1.5 text-xs font-semibold text-tg-button-text"
+                    >
+                      Read offline
+                    </button>
+                    <Link
+                      to={`/chapter/${encodeURIComponent(chapter.id)}?comic=${encodeURIComponent(chapter.comicId)}`}
+                      className="rounded-lg bg-black/25 px-3 py-1.5 text-xs text-tg-text"
+                    >
+                      Details
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void removeIssue(chapter)}
+                      className="rounded-lg bg-black/25 px-3 py-1.5 text-xs text-tg-destructive"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {issues.length > 0 && (
+        <section className="mt-8">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+            Remove by series
+          </h2>
+          <ComicBulkRemove issues={issues} onRemove={removeAllForComic} />
+        </section>
+      )}
     </div>
+  );
+}
+
+function ComicBulkRemove({
+  issues,
+  onRemove,
+}: {
+  issues: DownloadedIssue[];
+  onRemove: (comicId: string, title: string) => void;
+}): React.JSX.Element {
+  const byComic = new Map<string, { title: string; count: number; bytes: number }>();
+  for (const { chapter, comicTitle } of issues) {
+    const row = byComic.get(chapter.comicId) ?? {
+      title: comicTitle,
+      count: 0,
+      bytes: 0,
+    };
+    row.count += 1;
+    row.bytes += chapter.bytes ?? 0;
+    byComic.set(chapter.comicId, row);
+  }
+
+  return (
+    <ul className="mt-2 divide-y divide-white/5">
+      {[...byComic.entries()].map(([comicId, row]) => (
+        <li key={comicId} className="flex items-center gap-3 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm text-tg-text">{row.title}</p>
+            <p className="text-xs text-tg-hint">
+              {row.count} {row.count === 1 ? 'issue' : 'issues'} · {formatBytes(row.bytes)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => onRemove(comicId, row.title)}
+            className="shrink-0 rounded-lg bg-tg-secondary-bg px-3 py-1.5 text-xs text-tg-destructive"
+          >
+            Remove all
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -188,7 +303,7 @@ function StorageSummary({
       )}
 
       <p className="mt-2 text-xs text-tg-hint">
-        {formatBytes(storage.pageBytes)} of that is downloaded comic pages.
+        {formatBytes(storage.pageBytes)} is offline comic pages on this device.
       </p>
 
       {!storage.persisted && (
@@ -249,7 +364,7 @@ function QueueRow({ task }: { task: DownloadTask }): React.JSX.Element {
 
       <div className="mt-1 flex justify-between text-xs text-tg-hint">
         <span className="tabular-nums">
-          {task.completed} / {task.total} pages
+          {task.completed} / {task.total > 0 ? task.total : '…'} pages
         </span>
         <span>{task.status === 'failed' ? task.error : formatBytes(task.bytes)}</span>
       </div>
