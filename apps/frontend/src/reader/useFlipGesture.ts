@@ -50,6 +50,12 @@ export interface FlipState {
   originY: number;
   /** Locked top (1) or bottom (0) corner for this peel. */
   cornerY: 0 | 1;
+  /**
+   * Latest pointer in clip space for FlipScene's Raycaster.
+   * Null when the finger is up / settle owns the tip.
+   */
+  ndcX: number | null;
+  ndcY: number | null;
   /** True while a finger is down and driving the tip target. */
   dragging: boolean;
   /** Set once a release has been committed, to suppress duplicate commits. */
@@ -148,6 +154,8 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     progress: 0,
     target: 0,
     ...idleTip(),
+    ndcX: null,
+    ndcY: null,
     dragging: false,
     settling: false,
     direction: null,
@@ -156,6 +164,14 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     panX: 0,
     panY: 0,
   });
+
+  const setNdc = useCallback((clientX: number, clientY: number) => {
+    const s = state.current;
+    const w = Math.max(1, surfaceWidth.current);
+    const h = Math.max(1, surfaceHeight.current);
+    s.ndcX = ((clientX - surfaceLeft.current) / w) * 2 - 1;
+    s.ndcY = -((clientY - surfaceTop.current) / h) * 2 + 1;
+  }, []);
 
   const pointers = useRef(new Map<number, PointerRecord>());
   const surfaceWidth = useRef(1);
@@ -266,6 +282,9 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
       const origin = restCorner(direction, rtl, cornerY);
       const done = completeTip(direction, rtl, s.targetTipY || s.tipY || 0.35);
       s.settling = true;
+      s.dragging = false;
+      s.ndcX = null;
+      s.ndcY = null;
       s.direction = direction;
       s.cornerY = cornerY;
       s.originX = origin.x;
@@ -292,6 +311,8 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     s.targetTipY = origin.y;
     s.target = 0;
     s.settling = false;
+    s.ndcX = null;
+    s.ndcY = null;
     peelLock.current = null;
   }, [rtl]);
 
@@ -373,9 +394,10 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
         axisLock.current = null;
         crossedThreshold.current = false;
         peelLock.current = null;
+        setNdc(e.clientX, e.clientY);
       }
     },
-    [cancelTurn],
+    [cancelTurn, setNdc],
   );
 
   const onPointerMove = useCallback(
@@ -432,32 +454,43 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
 
       if (axisLock.current === null) {
         if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > PAN_LOCKOUT_PX) {
+          // Any peel-ish drag counts — Apple Books allows diagonal corner lifts.
           const cornerish =
-            Math.abs(dx) > TAP_SLOP_PX * 0.6 ||
-            (Math.abs(dy) > TAP_SLOP_PX && Math.abs(dx) > Math.abs(dy) * 0.35);
+            Math.abs(dx) > TAP_SLOP_PX * 0.5 ||
+            (Math.abs(dy) > TAP_SLOP_PX && Math.abs(dx) > Math.abs(dy) * 0.25);
           axisLock.current = cornerish || Math.abs(dx) >= Math.abs(dy) ? 'horizontal' : 'vertical';
         } else {
+          setNdc(e.clientX, e.clientY);
           return;
         }
       }
       if (axisLock.current === 'vertical') return;
 
+      setNdc(e.clientX, e.clientY);
       const finger = projectFinger(e.clientX, e.clientY);
 
-      // Lock peel corner + direction on first meaningful drag (Apple Books).
+      // Lock corner from touch half (demo: isRight / isTop) — fold axis stays dynamic.
       if (!peelLock.current) {
-        const rawForward = rtl ? dx > 0 : dx < 0;
-        const direction: TurnDirection = rawForward ? 'next' : 'prev';
+        const isRight = finger.x >= 0.5;
         const cornerY = cornerYFromPointer(finger.y);
+        const direction: TurnDirection = rtl
+          ? isRight
+            ? 'prev'
+            : 'next'
+          : isRight
+            ? 'next'
+            : 'prev';
         const origin = restCorner(direction, rtl, cornerY);
         peelLock.current = { direction, cornerY };
-        // Snap rendered tip to the corner so the peel grows from zero.
         s.tipX = origin.x;
         s.tipY = origin.y;
         s.originX = origin.x;
         s.originY = origin.y;
         s.cornerY = cornerY;
         s.direction = direction;
+        // Seed target from the projected finger; Raycaster refines each frame.
+        s.targetTipX = finger.x;
+        s.targetTipY = finger.y;
       }
 
       const { direction, cornerY } = peelLock.current;
@@ -470,18 +503,25 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
           origin.x + (finger.x - origin.x) * 0.12,
           origin.y + (finger.y - origin.y) * 0.12,
         );
+        s.ndcX = null;
+        s.ndcY = null;
         return;
       }
 
-      // Tip target = finger on the page plane — fold axis follows dynamically.
-      applyTipTarget(direction, cornerY, finger.x, finger.y);
+      // Progress from current tip; world target comes from Raycaster in FlipScene.
+      s.direction = direction;
+      s.cornerY = cornerY;
+      s.originX = origin.x;
+      s.originY = origin.y;
+      s.progress = progressFromTip(s.tipX, s.tipY, direction, rtl, cornerY);
+      s.target = s.progress;
 
       if (!crossedThreshold.current && Math.abs(s.progress) >= COMMIT_THRESHOLD) {
         crossedThreshold.current = true;
         callbacks.current.onThresholdCrossed?.();
       }
     },
-    [applyTipTarget, projectFinger, rtl],
+    [applyTipTarget, projectFinger, rtl, setNdc],
   );
 
   const endPointer = useCallback(
@@ -501,8 +541,12 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
       const travelled = Math.hypot(dx, dy);
 
       s.dragging = false;
+      s.ndcX = null;
+      s.ndcY = null;
 
       if (travelled < TAP_SLOP_PX && elapsed < TAP_MAX_MS) {
+        // Treat as tap — cancel any tentative peel.
+        if (peelLock.current) cancelTurn();
         const width = surfaceWidth.current;
         const localX = record.x - surfaceLeft.current;
         const zone = tapZone(localX, width);

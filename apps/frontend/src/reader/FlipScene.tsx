@@ -1,11 +1,14 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import {
   Color,
   DoubleSide,
+  Plane,
   PlaneGeometry,
+  Raycaster,
   ShaderMaterial,
   Vector2,
+  Vector3,
   type Texture,
 } from 'three';
 import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
@@ -22,13 +25,13 @@ import type { FlipState, TurnDirection } from './useFlipGesture';
 /**
  * Apple Books true physics curl.
  *
- * Base sheet stays flat (destination + contact shadow).
- * Top sheet alone deforms; tip eases toward the finger with paper lerp.
+ * Finger → page plane via THREE.Raycaster (same as the reference demo).
+ * Base sheet stays flat; only the top sheet uses the bisector cylinder shader.
  */
 
 export interface FlipSceneProps {
   gesture: React.RefObject<FlipState>;
-  /** Written each frame so gestures can raycast onto the letterboxed page. */
+  /** Written each frame so gestures know page letterbox bounds. */
   layoutRef: React.MutableRefObject<PageLayout>;
   currentTexture: Texture | null;
   currentZoomTexture: Texture | null;
@@ -60,11 +63,10 @@ function createMaterial(
     polygonOffsetFactor: turning ? -1 : 1,
     polygonOffsetUnits: turning ? -1 : 1,
     uniforms: {
-      uWidth: { value: 1 },
-      uHeight: { value: 1 },
-      uTip: { value: new Vector2(1, 0) },
-      uOrigin: { value: new Vector2(1, 0) },
+      uPointer: { value: new Vector2(0, 0) },
+      uCorner: { value: new Vector2(0, 0) },
       uRadius: { value: 0.18 },
+      uTip: { value: new Vector2(1, 0) },
       uActive: { value: 0 },
       uFront: { value: null },
       uBack: { value: null },
@@ -76,6 +78,10 @@ function createMaterial(
       uIsTurning: { value: turning ? 1 : 0 },
     },
   });
+}
+
+function uvToPage(x: number, y: number, w: number, h: number): Vector2 {
+  return new Vector2((x - 0.5) * w, (y - 0.5) * h);
 }
 
 export function FlipScene({
@@ -110,6 +116,13 @@ export function FlipScene({
   const sheetMaterial = useMemo(() => createMaterial(paperColor, pageDim, true), []);
   const baseMaterial = useMemo(() => createMaterial(paperColor, pageDim, false), []);
 
+  const raycaster = useMemo(() => new Raycaster(), []);
+  const pagePlane = useMemo(() => new Plane(new Vector3(0, 0, 1), 0), []);
+  const hitPoint = useMemo(() => new Vector3(), []);
+  const ndc = useMemo(() => new Vector2(), []);
+  const cornerWorld = useRef(new Vector2());
+  const pointerWorld = useRef(new Vector2());
+
   useEffect(() => {
     layoutRef.current = {
       pageWidth,
@@ -120,14 +133,13 @@ export function FlipScene({
   }, [layoutRef, pageWidth, pageHeight, viewport.width, viewport.height]);
 
   useEffect(() => {
-    const radius = pageWidth * 0.11;
+    // Demo uses R≈0.18 on PAGE_W=1.6 → ~0.1125 × width.
+    const radius = pageWidth * 0.1125;
     for (const mat of [sheetMaterial, baseMaterial]) {
-      mat.uniforms['uWidth']!.value = pageWidth;
-      mat.uniforms['uHeight']!.value = pageHeight;
       mat.uniforms['uRadius']!.value = radius;
     }
     invalidate();
-  }, [pageWidth, pageHeight, sheetMaterial, baseMaterial, invalidate]);
+  }, [pageWidth, sheetMaterial, baseMaterial, invalidate]);
 
   useEffect(() => {
     for (const mat of [sheetMaterial, baseMaterial]) {
@@ -161,7 +173,21 @@ export function FlipScene({
       viewHeight: viewport.height,
     };
 
-    // Paper weight: tip always eases toward the finger / settle target.
+    // True Raycaster: NDC from the gesture → hit on the page plane z=0.
+    if (state.ndcX !== null && state.ndcY !== null && state.dragging) {
+      ndc.set(state.ndcX, state.ndcY);
+      raycaster.setFromCamera(ndc, camera);
+      if (raycaster.ray.intersectPlane(pagePlane, hitPoint)) {
+        const maxX = pageWidth * 1.5;
+        const maxY = pageHeight * 1.2;
+        const wx = Math.max(-maxX, Math.min(maxX, hitPoint.x));
+        const wy = Math.max(-maxY, Math.min(maxY, hitPoint.y));
+        state.targetTipX = wx / pageWidth + 0.5;
+        state.targetTipY = wy / pageHeight + 0.5;
+      }
+    }
+
+    // Paper weight — same feel as uniforms.uPointer.lerp(target, 0.16).
     if (reducedMotion) {
       state.tipX = state.targetTipX;
       state.tipY = state.targetTipY;
@@ -195,17 +221,23 @@ export function FlipScene({
     const travel = direction
       ? tipTravel(state.tipX, state.tipY, direction, rtl, cornerY)
       : 0;
-    const active = direction ? Math.min(1, Math.max(0, (travel - 0.02) / 0.5)) : 0;
 
-    const tip = sheetMaterial.uniforms['uTip']!.value as Vector2;
-    const origin = sheetMaterial.uniforms['uOrigin']!.value as Vector2;
-    tip.set(state.tipX, state.tipY);
-    origin.set(state.originX, state.originY);
+    // Curl engages as soon as tip leaves the corner (demo: distToCorner > 0.001).
+    const active = direction && travel > 0.001 ? 1 : 0;
 
-    const baseTip = baseMaterial.uniforms['uTip']!.value as Vector2;
-    const baseOrigin = baseMaterial.uniforms['uOrigin']!.value as Vector2;
-    baseTip.set(state.tipX, state.tipY);
-    baseOrigin.set(state.originX, state.originY);
+    cornerWorld.current.copy(uvToPage(state.originX, state.originY, pageWidth, pageHeight));
+    pointerWorld.current.copy(uvToPage(state.tipX, state.tipY, pageWidth, pageHeight));
+
+    // Idle: pin pointer on the corner so the shader early-outs (no fold).
+    if (!direction || active === 0) {
+      pointerWorld.current.copy(cornerWorld.current);
+    }
+
+    for (const mat of [sheetMaterial, baseMaterial]) {
+      (mat.uniforms['uCorner']!.value as Vector2).copy(cornerWorld.current);
+      (mat.uniforms['uPointer']!.value as Vector2).copy(pointerWorld.current);
+      (mat.uniforms['uTip']!.value as Vector2).set(state.tipX, state.tipY);
+    }
 
     if (reducedMotion) {
       const mag = Math.min(1, Math.abs(state.progress));
@@ -228,14 +260,15 @@ export function FlipScene({
     baseMaterial.uniforms['uBack']!.value = null;
     baseMaterial.uniforms['uHasBack']!.value = 0;
 
+    // Perspective pan / zoom (Three.PerspectiveCamera.zoom still applies).
     camera.position.x = -state.panX / 200;
     camera.position.y = state.panY / 200;
     camera.zoom = state.scale;
     camera.updateProjectionMatrix();
 
     const tipSettled =
-      Math.abs(state.tipX - state.targetTipX) < 0.025 &&
-      Math.abs(state.tipY - state.targetTipY) < 0.025;
+      Math.abs(state.tipX - state.targetTipX) < 0.03 &&
+      Math.abs(state.tipY - state.targetTipY) < 0.03;
 
     const completing =
       state.settling &&
@@ -250,6 +283,8 @@ export function FlipScene({
       state.target = 0;
       state.direction = null;
       state.cornerY = 0;
+      state.ndcX = null;
+      state.ndcY = null;
       const rest = restCorner('next', rtl, 0);
       state.tipX = rest.x;
       state.tipY = rest.y;
@@ -282,6 +317,8 @@ export function FlipScene({
       state.direction = null;
       state.progress = 0;
       state.cornerY = 0;
+      state.ndcX = null;
+      state.ndcY = null;
       sheetMaterial.uniforms['uActive']!.value = 0;
       baseMaterial.uniforms['uActive']!.value = 0;
     }

@@ -388,10 +388,10 @@ export function ReaderCanvas({
       }}
     >
       <Canvas
-        orthographic
+        // Perspective matches the reference demo so cylinder lift has foreshortening.
         // Idle pages do not burn GPU; FlipScene / gestures call invalidate().
         frameloop="demand"
-        camera={{ position: [0, 0, 10], zoom: 1, near: 0.1, far: 100 }}
+        camera={{ position: [0, 0, 4.8], fov: 30, near: 0.1, far: 100, zoom: 1 }}
         // Capped at 2: a 3x device pixel ratio triples fragment work for a
         // difference nobody can see on a phone-sized comic page.
         dpr={[1, 2]}

@@ -40,8 +40,8 @@ export function completeTip(
 ): { x: number; y: number } {
   const fromRight = rtl ? direction === 'prev' : direction === 'next';
   const y = Math.min(0.92, Math.max(0.08, tipY));
-  // Past the opposite edge so the page finishes flat on the back.
-  return fromRight ? { x: -0.45, y } : { x: 1.45, y };
+  // Past the opposite edge (demo: ±1.5 × page width in world space → UV ±1).
+  return fromRight ? { x: -1, y } : { x: 2, y };
 }
 
 /**

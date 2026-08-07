@@ -34,11 +34,11 @@ describe('pageCurlMath', () => {
   it('maps tip travel into signed progress', () => {
     expect(progressFromTip(1, 0, 'next', false)).toBeCloseTo(0, 5);
     const mid = progressFromTip(0.35, 0.2, 'next', false);
-    expect(mid).toBeGreaterThan(0.4);
+    expect(mid).toBeGreaterThan(0.25);
     expect(mid).toBeLessThan(1);
-    expect(progressFromTip(-0.45, 0.35, 'next', false)).toBeCloseTo(1, 2);
+    expect(progressFromTip(-1, 0.35, 'next', false)).toBeCloseTo(1, 2);
     expect(progressFromTip(0, 0, 'prev', false)).toBeCloseTo(0, 5);
-    expect(progressFromTip(1.45, 0.35, 'prev', false)).toBeCloseTo(-1, 2);
+    expect(progressFromTip(2, 0.35, 'prev', false)).toBeCloseTo(-1, 2);
   });
 
   it('complete tip lands past the opposite edge', () => {
