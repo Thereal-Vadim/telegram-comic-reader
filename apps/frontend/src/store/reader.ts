@@ -10,41 +10,92 @@ import { create } from 'zustand';
 
 export type ReadingDirection = 'ltr' | 'rtl';
 export type PageLayout = 'single' | 'auto-spread';
-export type PaperPresetId = 'soft' | 'sepia' | 'night';
+export type PageAnimation = 'slide' | 'curl' | 'fade' | 'scroll';
+export type PaperPresetId =
+  | 'original'
+  | 'quiet'
+  | 'paper'
+  | 'bold'
+  | 'calm'
+  | 'focus'
+  // Legacy ids from earlier builds — still accepted when loading prefs.
+  | 'soft'
+  | 'sepia'
+  | 'night';
 
 export interface PaperPreset {
   readonly id: PaperPresetId;
   readonly label: string;
   /** Tint behind / under pages. */
   readonly paperColor: string;
-  /** Letterbox / ambient surround — softer than Telegram bg for less glare. */
+  /** Letterbox / ambient surround. */
   readonly ambientColor: string;
   /** Multiplier applied to page textures (night dims bright scans). */
   readonly pageDim: number;
+  /** Swatch text colour for the theme card. */
+  readonly inkColor: string;
 }
 
 export const PAPER_PRESETS: readonly PaperPreset[] = [
   {
-    id: 'soft',
-    label: 'Soft',
-    paperColor: '#f4f0e6',
-    ambientColor: '#1a1814',
+    id: 'original',
+    label: 'Original',
+    paperColor: '#ffffff',
+    ambientColor: '#e8e8ed',
     pageDim: 1,
+    inkColor: '#1c1c1e',
   },
   {
-    id: 'sepia',
-    label: 'Sepia',
-    paperColor: '#e8dcc8',
-    ambientColor: '#16120e',
-    pageDim: 0.96,
+    id: 'quiet',
+    label: 'Quiet',
+    paperColor: '#2c2c2e',
+    ambientColor: '#1c1c1e',
+    pageDim: 0.88,
+    inkColor: '#aeaeb2',
   },
   {
-    id: 'night',
-    label: 'Night',
-    paperColor: '#2a2a2c',
-    ambientColor: '#0b0b0d',
-    pageDim: 0.82,
+    id: 'paper',
+    label: 'Paper',
+    paperColor: '#f4f0e6',
+    ambientColor: '#e5dfd2',
+    pageDim: 1,
+    inkColor: '#1c1c1e',
   },
+  {
+    id: 'bold',
+    label: 'Bold',
+    paperColor: '#ffffff',
+    ambientColor: '#f2f2f7',
+    pageDim: 1.05,
+    inkColor: '#000000',
+  },
+  {
+    id: 'calm',
+    label: 'Calm',
+    paperColor: '#f3e6d8',
+    ambientColor: '#e8d5c4',
+    pageDim: 0.97,
+    inkColor: '#4a3728',
+  },
+  {
+    id: 'focus',
+    label: 'Focus',
+    paperColor: '#f2f2f7',
+    ambientColor: '#d1d1d6',
+    pageDim: 1,
+    inkColor: '#1c1c1e',
+  },
+] as const;
+
+export const PAGE_ANIMATIONS: readonly {
+  id: PageAnimation;
+  label: string;
+  description: string;
+}[] = [
+  { id: 'slide', label: 'Slide', description: 'Horizontal push' },
+  { id: 'curl', label: 'Curl', description: 'Apple Books fold' },
+  { id: 'fade', label: 'Fast Fade', description: 'Quick cross-fade' },
+  { id: 'scroll', label: 'Scroll', description: 'Continuous vertical' },
 ] as const;
 
 const STORAGE_KEY = 'comic.readerPrefs';
@@ -52,6 +103,7 @@ const STORAGE_KEY = 'comic.readerPrefs';
 interface PersistedPrefs {
   direction?: ReadingDirection;
   paperPreset?: PaperPresetId;
+  pageAnimation?: PageAnimation;
 }
 
 function loadPrefs(): PersistedPrefs {
@@ -73,8 +125,22 @@ function savePrefs(partial: PersistedPrefs): void {
   }
 }
 
+/** Map legacy preset ids onto the Apple Books–style set. */
+function normalizePresetId(id: PaperPresetId | undefined): PaperPresetId {
+  if (id === 'soft' || id === 'sepia') return 'paper';
+  if (id === 'night') return 'quiet';
+  if (PAPER_PRESETS.some((p) => p.id === id)) return id!;
+  return 'paper';
+}
+
 function presetById(id: PaperPresetId | undefined): PaperPreset {
-  return PAPER_PRESETS.find((p) => p.id === id) ?? PAPER_PRESETS[0]!;
+  const normalized = normalizePresetId(id);
+  return PAPER_PRESETS.find((p) => p.id === normalized) ?? PAPER_PRESETS[2]!;
+}
+
+function normalizeAnimation(id: PageAnimation | undefined): PageAnimation {
+  if (id === 'slide' || id === 'curl' || id === 'fade' || id === 'scroll') return id;
+  return 'curl';
 }
 
 export interface ReaderState {
@@ -82,6 +148,7 @@ export interface ReaderState {
   direction: ReadingDirection;
   layout: PageLayout;
   paperPreset: PaperPresetId;
+  pageAnimation: PageAnimation;
   /** Paper tint behind pages, so scans with transparent margins look right. */
   paperColor: string;
   ambientColor: string;
@@ -94,6 +161,7 @@ export interface ReaderState {
   setDirection: (direction: ReadingDirection) => void;
   setLayout: (layout: PageLayout) => void;
   setPaperPreset: (id: PaperPresetId) => void;
+  setPageAnimation: (id: PageAnimation) => void;
   toggleStats: () => void;
 }
 
@@ -106,14 +174,16 @@ const initial = (() => {
     paperColor: paper.paperColor,
     ambientColor: paper.ambientColor,
     pageDim: paper.pageDim,
+    pageAnimation: normalizeAnimation(prefs.pageAnimation),
   };
 })();
 
 export const useReaderSettings = create<ReaderState>((set) => ({
-  chromeVisible: true,
+  chromeVisible: false,
   direction: initial.direction,
   layout: 'single',
   paperPreset: initial.paperPreset,
+  pageAnimation: initial.pageAnimation,
   paperColor: initial.paperColor,
   ambientColor: initial.ambientColor,
   pageDim: initial.pageDim,
@@ -135,6 +205,10 @@ export const useReaderSettings = create<ReaderState>((set) => ({
       ambientColor: paper.ambientColor,
       pageDim: paper.pageDim,
     });
+  },
+  setPageAnimation: (pageAnimation) => {
+    savePrefs({ pageAnimation });
+    set({ pageAnimation });
   },
   toggleStats: () => set((s) => ({ showStats: !s.showStats })),
 }));

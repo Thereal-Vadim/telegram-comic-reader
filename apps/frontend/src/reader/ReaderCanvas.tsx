@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Canvas, invalidate, useThree } from '@react-three/fiber';
 import type { Texture, WebGLRenderer } from 'three';
+import type { PageAnimation } from '../store/reader';
 import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
-import { FlipScene } from './FlipScene';
+import { FlipScene, type FlipAnimation } from './FlipScene';
 import type { PageLayout } from './pageCurlMath';
 import { TextureManager, type TextureSource } from './TextureManager';
 import { useFlipGesture, type TurnDirection } from './useFlipGesture';
@@ -33,6 +42,11 @@ export interface ReaderPage {
   height: number | null;
 }
 
+export interface ReaderCanvasHandle {
+  nudgeScale: (delta: number) => void;
+  getScale: () => number;
+}
+
 export interface ReaderCanvasProps {
   pages: ReaderPage[];
   index: number;
@@ -41,11 +55,15 @@ export interface ReaderCanvasProps {
   onThresholdCrossed?: () => void;
   /** Fired when pinch / double-tap crosses into or out of a zoomed state. */
   onZoomChange?: (zoomed: boolean) => void;
+  /** Fired whenever scale changes (settings sheet %). */
+  onScaleChange?: (scale: number) => void;
   /** Right-to-left reading order. */
   rtl?: boolean;
   paperColor?: string;
   /** Dim bright page scans for night / eye comfort (1 = full). */
   pageDim?: number;
+  /** Page-turn style (scroll is handled outside the canvas). */
+  animation?: Exclude<PageAnimation, 'scroll'>;
   /** Surfaces GPU budget numbers to a debug overlay. */
   onStats?: (stats: ReturnType<TextureManager['stats']>) => void;
 }
@@ -97,18 +115,24 @@ function RendererBridge({
   return null;
 }
 
-export function ReaderCanvas({
-  pages,
-  index,
-  onIndexChange,
-  onTapCentre,
-  onThresholdCrossed,
-  onZoomChange,
-  rtl = false,
-  paperColor = '#f8f5ef',
-  pageDim = 1,
-  onStats,
-}: ReaderCanvasProps): React.JSX.Element {
+export const ReaderCanvas = forwardRef<ReaderCanvasHandle, ReaderCanvasProps>(
+  function ReaderCanvas(
+    {
+      pages,
+      index,
+      onIndexChange,
+      onTapCentre,
+      onThresholdCrossed,
+      onZoomChange,
+      onScaleChange,
+      rtl = false,
+      paperColor = '#f8f5ef',
+      pageDim = 1,
+      animation = 'curl',
+      onStats,
+    },
+    ref,
+  ): React.JSX.Element {
   /*
    * The manager's lifetime is tied to the mount, not to a memo.
    *
@@ -170,20 +194,37 @@ export function ReaderCanvas({
         zoomedRef.current = zoomed;
         onZoomChange?.(zoomed);
       }
+      onScaleChange?.(scale);
     },
-    [onZoomChange],
+    [onZoomChange, onScaleChange],
   );
 
-  const { state: gesture, bind, startTurn, resetZoom } = useFlipGesture({
-    onCommit: () => undefined, // the scene commits once the paper lerp settles
-    onTapCentre,
-    ...(onThresholdCrossed ? { onThresholdCrossed } : {}),
-    onScaleChange: handleScaleChange,
-    canTurn,
-    layoutRef,
-    rtl,
-    reducedMotion,
-  });
+  const { state: gesture, bind, startTurn, resetZoom, nudgeScale, getScale } =
+    useFlipGesture({
+      onCommit: () => undefined, // the scene commits once the paper lerp settles
+      onTapCentre,
+      ...(onThresholdCrossed ? { onThresholdCrossed } : {}),
+      onScaleChange: handleScaleChange,
+      canTurn,
+      layoutRef,
+      rtl,
+      reducedMotion,
+    });
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      nudgeScale: (delta: number) => {
+        nudgeScale(delta);
+        invalidate();
+      },
+      getScale,
+    }),
+    [nudgeScale, getScale],
+  );
+
+  const flipAnimation: FlipAnimation =
+    animation === 'slide' || animation === 'fade' ? animation : 'curl';
 
   // Gesture handlers mutate a ref; with frameloop="demand" we must request a
   // redraw after every pointer event or the sheet would never move.
@@ -416,6 +457,7 @@ export function ReaderCanvas({
           aspect={aspect}
           paperColor={paperColor}
           pageDim={pageDim}
+          animation={flipAnimation}
           onTurnComplete={handleTurnComplete}
           reducedMotion={reducedMotion}
           rtl={rtl}
@@ -423,7 +465,7 @@ export function ReaderCanvas({
       </Canvas>
     </div>
   );
-}
+});
 
 /** Tracks the OS "reduce motion" preference, which the reader honours. */
 export function usePrefersReducedMotion(): boolean {
