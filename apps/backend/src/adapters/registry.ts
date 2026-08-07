@@ -14,6 +14,7 @@ import type { Config } from '../config.js';
 import { LocalAdapter } from './local.js';
 import { OpdsAdapter, type GuardedFetch } from './opds.js';
 import { ArchiveOrgAdapter } from './archiveOrg.js';
+import { ImportAdapter } from './import.js';
 import type { ImageSource, ProviderAdapter, SearchArgs } from './types.js';
 
 /**
@@ -35,20 +36,38 @@ interface FanOut<T> {
 
 export class AdapterRegistry {
   readonly #adapters = new Map<string, ProviderAdapter>();
-  readonly #proxyHosts = new Set<string>();
+  readonly #proxyHosts: Set<string>;
+  readonly #imports: ImportAdapter | null;
 
-  constructor(adapters: ProviderAdapter[], extraProxyHosts: readonly string[]) {
+  constructor(
+    adapters: ProviderAdapter[],
+    extraProxyHosts: readonly string[],
+    /**
+     * Shared mutable host set. Import adapter adds web-image hosts here at
+     * import time so the image proxy can fetch them without a restart.
+     */
+    sharedProxyHosts?: Set<string>,
+  ) {
+    this.#proxyHosts = sharedProxyHosts ?? new Set<string>();
+    let imports: ImportAdapter | null = null;
     for (const a of adapters) {
       if (this.#adapters.has(a.id)) throw new Error(`duplicate adapter id "${a.id}"`);
       this.#adapters.set(a.id, a);
+      if (a instanceof ImportAdapter) imports = a;
       for (const h of a.proxyHosts()) this.#proxyHosts.add(h.toLowerCase());
     }
     for (const h of extraProxyHosts) this.#proxyHosts.add(h.toLowerCase());
+    this.#imports = imports;
   }
 
-  /** Hostnames the image proxy may contact. Fixed at boot. */
-  get proxyHosts(): ReadonlySet<string> {
+  /** Hostnames the image proxy may contact. Grows when web imports land. */
+  get proxyHosts(): Set<string> {
     return this.#proxyHosts;
+  }
+
+  /** Personal URL-import adapter, when configured. */
+  get imports(): ImportAdapter | null {
+    return this.#imports;
   }
 
   get size(): number {
@@ -242,13 +261,15 @@ export class AdapterRegistry {
   }
 }
 
-/** Build the registry from configuration. Returns an empty registry if nothing is configured. */
+/** Build the registry from configuration. */
 export function buildRegistry(
   cfg: Config,
   guardedFetch: GuardedFetch,
   archiveFetch: GuardedFetch = guardedFetch,
+  importFetch: GuardedFetch = archiveFetch,
 ): AdapterRegistry {
   const adapters: ProviderAdapter[] = [];
+  const sharedProxyHosts = new Set<string>();
 
   if (cfg.localLibraryDir) {
     adapters.push(new LocalAdapter(cfg.localLibraryDir, cfg.imageMaxSourceBytes));
@@ -276,5 +297,17 @@ export function buildRegistry(
     );
   }
 
-  return new AdapterRegistry(adapters, cfg.proxyExtraHosts);
+  if (cfg.importEnabled) {
+    adapters.push(
+      new ImportAdapter({
+        dir: path.join(archiveDir, 'imports'),
+        fetch: importFetch,
+        maxArchiveBytes: cfg.importMaxBytes,
+        maxEntryBytes: cfg.imageMaxSourceBytes,
+        extraHosts: sharedProxyHosts,
+      }),
+    );
+  }
+
+  return new AdapterRegistry(adapters, cfg.proxyExtraHosts, sharedProxyHosts);
 }

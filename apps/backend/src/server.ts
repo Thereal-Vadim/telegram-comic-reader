@@ -10,6 +10,7 @@ import { resolveSafeTarget, safeFetch, safeFetchFollowingRedirects, type GuardOp
 import { registerAuthRoutes, requireSession } from './routes/auth.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerImageRoutes } from './routes/image.js';
+import { registerImportRoutes } from './routes/import.js';
 
 export interface BuiltServer {
   readonly app: FastifyInstance;
@@ -43,6 +44,13 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     allowPrivate: cfg.allowPrivateUpstream,
   };
 
+  /** User-initiated imports may reach any public host; private ranges stay blocked. */
+  const importGuardOptions: GuardOptions = {
+    allowedHosts: new Set<string>(),
+    allowPrivate: cfg.allowPrivateUpstream,
+    allowAnyPublicHost: true,
+  };
+
   const guardedFetch = async (url: string, headers: Record<string, string> = {}) => {
     const target = await resolveSafeTarget(url, guardOptions);
     return safeFetch(target, {
@@ -63,7 +71,16 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
       accept: headers['accept'] ?? headers['Accept'] ?? '*/*',
     });
 
-  const registry = buildRegistry(cfg, guardedFetch, archiveFetch);
+  // Personal imports: any public host, large body ceiling, redirect-aware.
+  const importFetch = async (url: string, headers: Record<string, string> = {}) =>
+    safeFetchFollowingRedirects(url, importGuardOptions, {
+      headers,
+      timeoutMs: 120_000,
+      maxBytes: cfg.importMaxBytes,
+      accept: headers['accept'] ?? headers['Accept'] ?? '*/*',
+    });
+
+  const registry = buildRegistry(cfg, guardedFetch, archiveFetch, importFetch);
   guardOptions = { allowedHosts: registry.proxyHosts, allowPrivate: cfg.allowPrivateUpstream };
 
   const cache = new ImageCache(cfg.imageCacheDir, cfg.imageCacheMaxBytes);
@@ -124,6 +141,14 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     maxSourceBytes: cfg.imageMaxSourceBytes,
     guard: guardOptions,
   });
+
+  if (registry.imports) {
+    registerImportRoutes(app, {
+      imports: registry.imports,
+      registry,
+      guard: requireSession(cfg),
+    });
+  }
 
   if (registry.size === 0) {
     app.log.warn(
