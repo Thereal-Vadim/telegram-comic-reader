@@ -39,6 +39,7 @@ const container = document.getElementById('root');
 if (!container) throw new Error('#root is missing from index.html');
 
 bootStage('react', 'Mounting UI');
+container.dataset['booted'] = '1';
 createRoot(container).render(
   <StrictMode>
     <ErrorBoundary>

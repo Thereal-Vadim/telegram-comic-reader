@@ -70,7 +70,38 @@
       // Earliest possible breadcrumb if the module graph fails after this.
       window.__comicBoot = window.__comicBoot || [];
       window.__comicBoot.push({ t: Date.now(), stage: 'html-ready' });
-      document.getElementById('boot-splash-stage').textContent = 'Loading JavaScript bundle…';
+      var stageEl = document.getElementById('boot-splash-stage');
+      stageEl.textContent = 'Loading JavaScript bundle…';
+
+      function showBootFailure(message) {
+        stageEl.style.color = '#ec3942';
+        stageEl.textContent = message;
+        if (document.getElementById('boot-reload')) return;
+        var btn = document.createElement('button');
+        btn.id = 'boot-reload';
+        btn.textContent = 'Reload';
+        btn.style.cssText =
+          'margin-top:8px;padding:10px 18px;border:0;border-radius:10px;background:#5288c1;color:#fff;font-size:14px;font-weight:600';
+        btn.onclick = function () {
+          location.reload();
+        };
+        stageEl.parentNode.appendChild(btn);
+      }
+
+      window.addEventListener('error', function (event) {
+        if (document.getElementById('root')?.dataset?.booted === '1') return;
+        showBootFailure('JS error: ' + (event.message || 'module failed to load'));
+      });
+
+      // If React never mounts, the splash must not sit forever on "Loading…".
+      setTimeout(function () {
+        if (document.getElementById('root')?.dataset?.booted === '1') return;
+        if (document.getElementById('boot-splash')) {
+          showBootFailure(
+            'Stuck loading the JS bundle. Check the tunnel/network, then tap Reload.',
+          );
+        }
+      }, 15000);
     </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
