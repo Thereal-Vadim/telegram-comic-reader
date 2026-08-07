@@ -28,6 +28,8 @@ export function registerCatalogRoutes(
   });
 
   app.get('/api/home', { preHandler: guard }, async (_request, reply) => {
+    // Import-only setups are valid: the home feed may be empty until the user
+    // pastes a link on the Sources page.
     if (registry.size === 0) {
       throw new AppError(
         'INTERNAL',

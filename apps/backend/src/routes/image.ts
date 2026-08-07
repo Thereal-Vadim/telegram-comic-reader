@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { AppError, ImageVariant } from '@comic/shared';
 import type { AdapterRegistry } from '../adapters/registry.js';
 import { LocalAdapter } from '../adapters/local.js';
+import { ImportAdapter } from '../adapters/import.js';
 import { getTranscodedImage, type PipelineDeps } from '../images/pipeline.js';
 
 /**
@@ -34,30 +35,48 @@ export function registerImageRoutes(
       const adapter = registry.get(adapterId);
       const source = await adapter.resolveImage(ref);
 
-      // Only the local adapter has a library root to resolve relative paths
-      // against; every other adapter deals in absolute paths it created itself.
+      // Local + import adapters own a root to resolve relative paths against;
+      // every other adapter deals in absolute paths it created itself.
       const resolveFilePath = (p: string): string => {
-        if (path.isAbsolute(p)) return p;
+        if (path.isAbsolute(p)) {
+          if (adapter instanceof ImportAdapter) return adapter.absolutePath(p);
+          return p;
+        }
         if (adapter instanceof LocalAdapter) return adapter.absolutePath(p);
         throw new AppError('INTERNAL', 'relative path from an adapter without a library root');
       };
 
       // A zip-entry source with an empty name means "whatever the first image
-      // is", which only the local adapter emits for covers.
-      const resolved =
-        source.kind === 'zip-entry' && source.entryName === '' && adapter instanceof LocalAdapter
-          ? {
-              ...source,
-              entryName: await adapter.firstEntryName(source.archivePath),
-            }
-          : source;
+      // is", which local/import adapters emit for covers.
+      let resolved = source;
+      if (source.kind === 'zip-entry' && source.entryName === '') {
+        if (adapter instanceof LocalAdapter) {
+          resolved = {
+            ...source,
+            entryName: await adapter.firstEntryName(source.archivePath),
+          };
+        } else if (adapter instanceof ImportAdapter) {
+          resolved = {
+            ...source,
+            entryName: await adapter.firstEntryName(source.archivePath),
+          };
+        }
+      }
 
       const cacheRef = `${adapterId}\u0000${ref}`;
+      // Web imports may pull page images from arbitrary public hosts (and their
+      // CDN redirects). Private ranges stay blocked; the catalog proxy allowlist
+      // does not apply to user-initiated import content.
+      const effectiveDeps =
+        adapter instanceof ImportAdapter
+          ? { ...deps, guard: { ...deps.guard, allowAnyPublicHost: true } }
+          : deps;
+
       const result = await getTranscodedImage(
         resolved,
         variant.data,
         cacheRef,
-        deps,
+        effectiveDeps,
         resolveFilePath,
       );
 

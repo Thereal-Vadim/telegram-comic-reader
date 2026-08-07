@@ -73,7 +73,7 @@ export function HomePage(): React.JSX.Element {
     return (
       <EmptyState
         title="No comics found"
-        description="Point the server at a folder of CBZ files with LOCAL_LIBRARY_DIR, or add an OPDS catalog with OPDS_CATALOGS, then restart it."
+        description="Import a comic from a link on the Sources tab, or point the server at a CBZ folder / OPDS catalog."
       />
     );
   }

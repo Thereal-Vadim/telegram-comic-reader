@@ -74,6 +74,18 @@ describe('isHostAllowed', () => {
 describe('resolveSafeTarget', () => {
   const guard = { allowedHosts: new Set(['example.com']), allowPrivate: false };
 
+  it('allows any public host when allowAnyPublicHost is set', async () => {
+    // example.com resolves publicly; we only assert the allowlist gate opens.
+    const open = {
+      allowedHosts: new Set<string>(),
+      allowPrivate: false,
+      allowAnyPublicHost: true as const,
+    };
+    // A literal public IP skips DNS and still passes the private-range check.
+    const target = await resolveSafeTarget('https://1.1.1.1/x', open);
+    expect(target.address).toBe('1.1.1.1');
+  });
+
   it('rejects a host that is not on the allowlist', async () => {
     await expect(resolveSafeTarget('https://elsewhere.com/a.jpg', guard)).rejects.toThrow(
       /not on the proxy allowlist/,

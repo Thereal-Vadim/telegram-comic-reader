@@ -175,7 +175,7 @@ export type PageListResponse = z.infer<typeof PageListResponse>;
 export const AdapterInfo = z.object({
   id: AdapterId,
   label: z.string(),
-  kind: z.enum(['local', 'opds', 'archive']),
+  kind: z.enum(['local', 'opds', 'archive', 'import']),
   /** False when the adapter is configured but its source is unreachable. */
   healthy: z.boolean(),
 });
@@ -183,6 +183,48 @@ export type AdapterInfo = z.infer<typeof AdapterInfo>;
 
 export const AdapterListResponse = z.object({ adapters: z.array(AdapterInfo) });
 export type AdapterListResponse = z.infer<typeof AdapterListResponse>;
+
+/* -------------------------------------------------------------------------- */
+/* Personal URL import                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * User-initiated import of a personal comic from an arbitrary public URL.
+ * Intended for files the user already owns (Drive / Dropbox / direct CBZ /
+ * their own site), not for browsing third-party catalogs.
+ */
+export const ImportRequest = z.object({
+  url: z.string().trim().url().max(2048),
+  /** Optional display title; derived from the URL or page when omitted. */
+  title: z.string().trim().min(1).max(200).optional(),
+});
+export type ImportRequest = z.infer<typeof ImportRequest>;
+
+export const ImportKind = z.enum(['archive', 'web']);
+export type ImportKind = z.infer<typeof ImportKind>;
+
+export const ImportResult = z.object({
+  comic: ComicDetail,
+  chapters: z.array(Chapter),
+  kind: ImportKind,
+  sourceUrl: z.string().url(),
+  /** True when pages were already saved for offline reading on the client. */
+  offlineQueued: z.boolean().default(false),
+});
+export type ImportResult = z.infer<typeof ImportResult>;
+
+export const ImportListResponse = z.object({
+  items: z.array(
+    z.object({
+      comic: ComicSummary,
+      kind: ImportKind,
+      sourceUrl: z.string().url(),
+      createdAt: z.iso.datetime(),
+      pageCount: z.number().int().nonnegative(),
+    }),
+  ),
+});
+export type ImportListResponse = z.infer<typeof ImportListResponse>;
 
 /* -------------------------------------------------------------------------- */
 /* Auth                                                                       */

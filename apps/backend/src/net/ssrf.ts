@@ -63,6 +63,12 @@ export interface GuardOptions {
   readonly allowedHosts: ReadonlySet<string>;
   /** Skip the private-range check (LAN OPDS servers). */
   readonly allowPrivate: boolean;
+  /**
+   * When true, any public host is accepted (host allowlist skipped).
+   * Used only for user-initiated personal imports — private ranges are
+   * still refused so this cannot become an SSRF pivot into the LAN.
+   */
+  readonly allowAnyPublicHost?: boolean;
 }
 
 /** Match `host` against the allowlist, honouring a leading `*.` wildcard. */
@@ -104,7 +110,7 @@ export async function resolveSafeTarget(rawUrl: string, opts: GuardOptions): Pro
     // Credentials in the URL would be forwarded verbatim; force explicit config.
     throw new AppError('ORIGIN_NOT_ALLOWED', 'credentials in upstream url are not permitted');
   }
-  if (!isHostAllowed(url.hostname, opts.allowedHosts)) {
+  if (!opts.allowAnyPublicHost && !isHostAllowed(url.hostname, opts.allowedHosts)) {
     throw new AppError('ORIGIN_NOT_ALLOWED', `host "${url.hostname}" is not on the proxy allowlist`);
   }
 

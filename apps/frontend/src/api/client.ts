@@ -4,6 +4,8 @@ import {
   AuthResponse,
   ChapterListResponse,
   HomeFeedResponse,
+  ImportListResponse,
+  ImportResult,
   PageListResponse,
   SearchResponse,
   type ApiErrorCode,
@@ -207,6 +209,54 @@ export class ApiClient {
 
   pages(chapterId: string): Promise<PageListResponse> {
     return this.#request(`/api/chapters/${encodeURIComponent(chapterId)}/pages`, PageListResponse);
+  }
+
+  listImports(): Promise<ImportListResponse> {
+    return this.#request('/api/import', ImportListResponse);
+  }
+
+  importUrl(args: { url: string; title?: string }): Promise<ImportResult> {
+    return this.#request('/api/import', ImportResult, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(args),
+    });
+  }
+
+  async deleteImport(id: string): Promise<void> {
+    // 204 has no body; reuse the request helper's auth/error path via a
+    // lightweight schema that accepts an empty object on odd proxies.
+    const token = await this.#token();
+    const res = await fetch(`${this.#baseUrl}/api/import/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { authorization: `Bearer ${token}` },
+    }).catch(() => {
+      throw new ApiClientError('NETWORK', 'network request failed');
+    });
+    if (res.status === 401) {
+      this.#session = null;
+      const retry = await fetch(`${this.#baseUrl}/api/import/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${(await this.#authenticate()).token}` },
+      });
+      if (!retry.ok && retry.status !== 204) {
+        throw new ApiClientError('UNAUTHORIZED', 'sign-in was rejected; relaunch the app', retry.status);
+      }
+      return;
+    }
+    if (!res.ok && res.status !== 204) {
+      const body = await res.json().catch(() => null);
+      const parsed = ApiError.safeParse(body);
+      if (parsed.success) {
+        throw new ApiClientError(
+          parsed.data.error.code,
+          parsed.data.error.message,
+          res.status,
+          parsed.data.error.retryAfterMs,
+        );
+      }
+      throw new ApiClientError('NETWORK', `request failed with status ${res.status}`, res.status);
+    }
   }
 
   /**

@@ -62,6 +62,21 @@ const RawConfig = z.object({
     .min(8 * 1024 * 1024)
     .default(150 * 1024 * 1024),
 
+  /**
+   * Personal URL import (Drive / Dropbox / direct CBZ / web pages). On by
+   * default; set IMPORT_ENABLED=false to hide the feature entirely.
+   */
+  IMPORT_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  /** Ceiling for a single imported archive download. */
+  IMPORT_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(8 * 1024 * 1024)
+    .default(150 * 1024 * 1024),
+
   /** Transcoded image cache location and ceiling. */
   IMAGE_CACHE_DIR: z.string().default(''),
   IMAGE_CACHE_MAX_BYTES: z.coerce
@@ -154,6 +169,8 @@ export interface Config {
   readonly opdsCatalogs: OpdsCatalogConfig[];
   readonly archiveOrgEnabled: boolean;
   readonly archiveMaxBytes: number;
+  readonly importEnabled: boolean;
+  readonly importMaxBytes: number;
   readonly imageCacheDir: string;
   readonly imageCacheMaxBytes: number;
   readonly imageWebpQuality: number;
@@ -199,6 +216,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     opdsCatalogs,
     archiveOrgEnabled: raw.ARCHIVE_ORG_ENABLED,
     archiveMaxBytes: raw.ARCHIVE_MAX_BYTES,
+    importEnabled: raw.IMPORT_ENABLED,
+    importMaxBytes: raw.IMPORT_MAX_BYTES,
     imageCacheDir: path.resolve(cacheDir),
     imageCacheMaxBytes: raw.IMAGE_CACHE_MAX_BYTES,
     imageWebpQuality: raw.IMAGE_WEBP_QUALITY,
