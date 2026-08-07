@@ -3,6 +3,7 @@ import {
   AdapterListResponse,
   AuthResponse,
   ChapterListResponse,
+  ComxSessionStatus,
   HomeFeedResponse,
   PageListResponse,
   SearchResponse,
@@ -207,6 +208,22 @@ export class ApiClient {
 
   pages(chapterId: string): Promise<PageListResponse> {
     return this.#request(`/api/chapters/${encodeURIComponent(chapterId)}/pages`, PageListResponse);
+  }
+
+  comxSession(): Promise<ComxSessionStatus> {
+    return this.#request('/api/comx/session', ComxSessionStatus);
+  }
+
+  connectComx(login: string, password: string): Promise<ComxSessionStatus> {
+    return this.#request('/api/comx/session', ComxSessionStatus, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ login, password }),
+    });
+  }
+
+  disconnectComx(): Promise<ComxSessionStatus> {
+    return this.#request('/api/comx/session', ComxSessionStatus, { method: 'DELETE' });
   }
 
   /**

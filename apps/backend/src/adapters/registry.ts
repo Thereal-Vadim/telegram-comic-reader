@@ -286,6 +286,8 @@ export function buildRegistry(
     const session = new ComxSession(comxGuard, {
       ...(credentials ? { credentials } : {}),
       maxBytes: cfg.imageMaxSourceBytes,
+      // Same cookie jar serves catalog HTML and later CBZ bulk downloads.
+      downloadMaxBytes: cfg.archiveMaxBytes,
     });
     comx = new ComxAdapter({
       session,

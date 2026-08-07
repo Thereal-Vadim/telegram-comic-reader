@@ -6,6 +6,7 @@ import {
   type GuardOptions,
   type SafeRequestResult,
 } from '../net/ssrf.js';
+import { loginComxWithBrowser } from './comxBrowserLogin.js';
 
 const BASE_URL = 'https://com-x.life';
 
@@ -18,6 +19,13 @@ const BROWSER_HEADERS: Record<string, string> = {
   'cache-control': 'no-cache',
   pragma: 'no-cache',
   referer: `${BASE_URL}/`,
+  'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'sec-fetch-dest': 'document',
+  'sec-fetch-mode': 'navigate',
+  'sec-fetch-site': 'same-origin',
+  'upgrade-insecure-requests': '1',
 };
 
 export interface ComxCredentials {
@@ -31,6 +39,14 @@ export interface ComxFetchInit {
   body?: string;
   /** Skip login-wall auto-auth for this call (used internally). */
   skipAuth?: boolean;
+  /** Override the default body size ceiling (e.g. CBZ downloads). */
+  maxBytes?: number;
+}
+
+export interface ComxSessionStatus {
+  connected: boolean;
+  login: string | null;
+  cookieCount: number;
 }
 
 /**
@@ -83,20 +99,27 @@ function isLoginWallHtml(html: string): boolean {
   );
 }
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
 /**
- * Cookie-aware HTML client for com-x.life.
+ * Cookie-aware HTML/binary client for com-x.life.
  *
- * Handles the site’s `/_c` → PoW → `/_v` anti-bot gate and optional DLE login
- * when the whole catalog is behind the “вход” wall.
+ * Login goes through real Chrome (human pacing). The resulting cookies are
+ * reused for catalog/search/chapters/pages and later file downloads — so one
+ * “go inside” session covers the whole adapter surface.
  */
 export class ComxSession {
   readonly #guard: GuardOptions;
-  readonly #credentials: ComxCredentials | undefined;
+  #credentials: ComxCredentials | undefined;
   readonly #timeoutMs: number;
   readonly #maxBytes: number;
+  readonly #downloadMaxBytes: number;
   readonly #cookies = new Map<string, string>();
-  #loginAttempted = false;
   #loginOk = false;
+  #loginInFlight: Promise<void> | null = null;
 
   constructor(
     guard: GuardOptions,
@@ -104,20 +127,66 @@ export class ComxSession {
       credentials?: ComxCredentials;
       timeoutMs?: number;
       maxBytes?: number;
+      /** Ceiling for CBZ / archive downloads (defaults to maxBytes). */
+      downloadMaxBytes?: number;
     } = {},
   ) {
     this.#guard = guard;
     this.#credentials = opts.credentials;
-    this.#timeoutMs = opts.timeoutMs ?? 30_000;
+    this.#timeoutMs = opts.timeoutMs ?? 45_000;
     this.#maxBytes = opts.maxBytes ?? 8 * 1024 * 1024;
+    this.#downloadMaxBytes = opts.downloadMaxBytes ?? this.#maxBytes;
+  }
+
+  status(): ComxSessionStatus {
+    return {
+      connected: this.#loginOk && this.#cookies.size > 0,
+      login: this.#credentials?.login ?? null,
+      cookieCount: this.#cookies.size,
+    };
+  }
+
+  setCredentials(credentials: ComxCredentials): void {
+    this.#credentials = credentials;
+    this.#loginOk = false;
+    this.#cookies.clear();
+  }
+
+  clearSession(): void {
+    this.#loginOk = false;
+    this.#cookies.clear();
+  }
+
+  /**
+   * Browser + Cookie headers for authenticated fetches outside this session
+   * (image proxy, future CBZ download URLs). Empty Cookie when not logged in.
+   */
+  authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const cookie = this.#cookieHeader();
+    return {
+      ...BROWSER_HEADERS,
+      ...extra,
+      ...(cookie ? { cookie } : {}),
+    };
+  }
+
+  /** Ensure we have a logged-in browser session (idempotent, single-flight). */
+  async ensureAuthenticated(): Promise<ComxSessionStatus> {
+    if (this.#loginOk && this.#cookies.size > 0) return this.status();
+    await this.#loginWithBrowser();
+    return this.status();
   }
 
   /** Adapter-facing fetch that returns a successful HTML/binary body. */
   async fetch(
     url: string,
     headers: Record<string, string> = {},
+    opts: { maxBytes?: number } = {},
   ): Promise<{ body: Buffer; contentType: string | null }> {
-    const result = await this.request(url, { headers });
+    const result = await this.request(url, {
+      headers,
+      ...(opts.maxBytes !== undefined ? { maxBytes: opts.maxBytes } : {}),
+    });
     if (result.statusCode < 200 || result.statusCode >= 300) {
       throw new AppError(
         'UPSTREAM_UNAVAILABLE',
@@ -127,7 +196,25 @@ export class ComxSession {
     return { body: result.body, contentType: result.contentType };
   }
 
+  /**
+   * Authenticated download of a larger binary (e.g. site CBZ bulk export).
+   * Uses the same cookie jar as catalog browsing — one “go inside” session.
+   */
+  async download(
+    url: string,
+    headers: Record<string, string> = {},
+  ): Promise<{ body: Buffer; contentType: string | null }> {
+    return this.fetch(url, headers, { maxBytes: this.#downloadMaxBytes });
+  }
+
   async request(url: string, init: ComxFetchInit = {}): Promise<SafeRequestResult> {
+    if (!init.skipAuth && !this.#loginOk) {
+      await this.ensureAuthenticated();
+      // Small pause after auth before the first content hit.
+      await sleep(800 + Math.floor(Math.random() * 700));
+    }
+
+    const maxBytes = init.maxBytes ?? this.#maxBytes;
     let current = url;
     let method: 'GET' | 'POST' = init.method ?? 'GET';
     let body = init.body;
@@ -136,14 +223,20 @@ export class ComxSession {
     let loginTries = 0;
 
     for (let hop = 0; hop < 10; hop++) {
-      const result = await this.#raw(current, {
-        method,
-        headers: hopHeaders,
-        ...(body !== undefined ? { body } : {}),
-      });
+      // Light pacing between hops so we do not look like a scrape burst.
+      if (hop > 0) await sleep(250 + Math.floor(Math.random() * 400));
+
+      const result = await this.#raw(
+        current,
+        {
+          method,
+          headers: hopHeaders,
+          ...(body !== undefined ? { body } : {}),
+        },
+        maxBytes,
+      );
       this.#absorbCookies(result.headers['set-cookie']);
 
-      // Anti-bot challenge pages are served as HTTP 404 on `/_c`.
       if (
         (result.statusCode === 404 || result.statusCode === 200) &&
         isChallengeHtml(result.body.toString('utf8'))
@@ -185,19 +278,20 @@ export class ComxSession {
         loginTries < 1
       ) {
         loginTries += 1;
-        await this.#login(current);
-        // Retry the original request after auth.
+        this.#loginOk = false;
+        await this.#loginWithBrowser();
         current = url;
         method = init.method ?? 'GET';
         body = init.body;
         hopHeaders = { ...BROWSER_HEADERS, ...init.headers };
+        await sleep(1000 + Math.floor(Math.random() * 800));
         continue;
       }
 
       if (!init.skipAuth && (result.statusCode === 401 || isLoginWallHtml(html))) {
         throw new AppError(
           'UPSTREAM_UNAVAILABLE',
-          'comx requires login: set COMX_LOGIN and COMX_PASSWORD',
+          'comx session expired — reconnect your com-x account in Library',
         );
       }
 
@@ -207,9 +301,38 @@ export class ComxSession {
     throw new AppError('ORIGIN_NOT_ALLOWED', 'too many upstream redirects on com-x');
   }
 
+  async #loginWithBrowser(): Promise<void> {
+    if (this.#loginInFlight) {
+      await this.#loginInFlight;
+      return;
+    }
+    if (!this.#credentials?.login || !this.#credentials.password) {
+      throw new AppError(
+        'UPSTREAM_UNAVAILABLE',
+        'comx requires login: connect your account in Library (or set COMX_LOGIN / COMX_PASSWORD)',
+      );
+    }
+
+    this.#loginInFlight = (async () => {
+      const { cookies } = await loginComxWithBrowser(this.#credentials!);
+      this.#cookies.clear();
+      for (const cookie of cookies) {
+        this.#cookies.set(cookie.name, cookie.value);
+      }
+      this.#loginOk = true;
+    })();
+
+    try {
+      await this.#loginInFlight;
+    } finally {
+      this.#loginInFlight = null;
+    }
+  }
+
   async #raw(
     url: string,
     init: { method: 'GET' | 'POST'; body?: string; headers: Record<string, string> },
+    maxBytes: number = this.#maxBytes,
   ): Promise<SafeRequestResult> {
     const target = await resolveSafeTarget(url, this.#guard);
     const cookie = this.#cookieHeader();
@@ -223,7 +346,7 @@ export class ComxSession {
       method: init.method,
       headers,
       timeoutMs: this.#timeoutMs,
-      maxBytes: this.#maxBytes,
+      maxBytes,
       accept,
       ...(init.body !== undefined ? { body: init.body } : {}),
     });
@@ -248,12 +371,14 @@ export class ComxSession {
     }
     const token = decodeURIComponent(tokenRaw);
     const targetUrl = decodeURIComponent(targetEnc);
+    const started = Date.now();
     const { nonce, hash } = solveComxPow(token);
+    const workTime = Math.max(12, Date.now() - started);
 
     const form = new URLSearchParams({
       token,
       mode: 'modern',
-      workTime: '18',
+      workTime: String(workTime),
       iterations: String(nonce + 80),
       hasCrypto: '1',
       pow_nonce: String(nonce),
@@ -269,6 +394,8 @@ export class ComxSession {
       cdpf: '',
     });
 
+    await sleep(200 + Math.floor(Math.random() * 300));
+
     const verify = await this.#raw(`${BASE_URL}/_v`, {
       method: 'POST',
       body: form.toString(),
@@ -279,6 +406,9 @@ export class ComxSession {
         referer: challengeUrl,
         'content-type': 'application/x-www-form-urlencoded',
         'x-requested-with': 'XMLHttpRequest',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
       },
     });
     this.#absorbCookies(verify.headers['set-cookie']);
@@ -290,62 +420,6 @@ export class ComxSession {
       );
     }
     return targetUrl;
-  }
-
-  async #login(refererUrl: string): Promise<void> {
-    if (this.#loginOk) return;
-    if (this.#loginAttempted) {
-      throw new AppError(
-        'UPSTREAM_UNAVAILABLE',
-        'comx login failed: check COMX_LOGIN / COMX_PASSWORD',
-      );
-    }
-    this.#loginAttempted = true;
-
-    if (!this.#credentials?.login || !this.#credentials.password) {
-      throw new AppError(
-        'UPSTREAM_UNAVAILABLE',
-        'comx requires login: set COMX_LOGIN and COMX_PASSWORD',
-      );
-    }
-
-    // Load the gate page (after PoW) so we can pick up dle_login_hash + session.
-    const gate = await this.request(refererUrl || `${BASE_URL}/`, {
-      skipAuth: true,
-    });
-    const gateHtml = gate.body.toString('utf8');
-    const csrf =
-      gateHtml.match(/window\.dle_login_hash\s*=\s*['"]([^'"]+)['"]/)?.[1] ??
-      gateHtml.match(/name=["']dle_login_hash["'][^>]*value=["']([^"']+)["']/)?.[1] ??
-      '';
-
-    const form = new URLSearchParams({
-      login_name: this.#credentials.login,
-      login_password: this.#credentials.password,
-      login: 'submit',
-    });
-    if (csrf) form.set('dle_login_hash', csrf);
-
-    const result = await this.request(`${BASE_URL}/`, {
-      method: 'POST',
-      body: form.toString(),
-      headers: {
-        ...BROWSER_HEADERS,
-        'content-type': 'application/x-www-form-urlencoded',
-        origin: BASE_URL,
-        referer: refererUrl || `${BASE_URL}/`,
-      },
-      skipAuth: true,
-    });
-
-    const html = result.body.toString('utf8');
-    if (result.statusCode === 401 || isLoginWallHtml(html)) {
-      throw new AppError(
-        'UPSTREAM_UNAVAILABLE',
-        'comx login rejected by site (HTTP 401). Verify COMX_LOGIN / COMX_PASSWORD on com-x.life',
-      );
-    }
-    this.#loginOk = true;
   }
 }
 

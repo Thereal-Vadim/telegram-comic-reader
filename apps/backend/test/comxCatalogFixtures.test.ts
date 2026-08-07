@@ -42,10 +42,14 @@ const FIVE_COMICS = [
 function catalogHtml(): string {
   const cards = FIVE_COMICS.map(
     (c) => `
-      <div class="short-story">
-        <div class="story-title"><a href="/comix/${c.slug}">${c.title}</a></div>
-        <img data-src="${c.cover}" alt="${c.title}" />
-        <span class="year">2024</span>
+      <div class="readed d-flex short">
+        <a href="https://com-x.life/comix/${c.slug}" class="readed__img">
+          <img data-src="${c.cover}" alt="${c.title}" />
+        </a>
+        <div class="readed__desc">
+          <h3 class="readed__title"><a href="https://com-x.life/comix/${c.slug}">${c.title}</a></h3>
+          <div class="readed__meta"><div class="readed__meta-item">2024</div></div>
+        </div>
       </div>`,
   ).join('\n');
 
@@ -55,23 +59,30 @@ function catalogHtml(): string {
 }
 
 function detailHtml(comic: (typeof FIVE_COMICS)[number]): string {
-  const chapters = comic.chapters
-    .map((title, i) => `<a href="/comix/${comic.slug.replace('.html', '')}/ch-${i + 1}.html">${title}</a>`)
-    .join('\n');
+  const newsId = 1000 + FIVE_COMICS.findIndex((c) => c.slug === comic.slug);
+  const chaptersJson = comic.chapters.map((title, i) => ({
+    id: newsId * 10 + i + 1,
+    posi: i + 1,
+    pages: 10,
+    title,
+    volume: 1,
+    number: i + 1,
+    date: '7.08.2026',
+  }));
   const descBlock = comic.description
-    ? `<div class="story-description">${comic.description}</div>`
-    : `<div class="story-description"></div>`;
+    ? `<div class="page__text full-text">${comic.description}</div>`
+    : `<div class="page__text full-text"></div>`;
 
   return `<html><body>
-    <h1 class="full-story-title">${comic.title}</h1>
-    <div class="full-story-img"><img src="${comic.cover.startsWith('//') ? `https:${comic.cover}` : comic.cover}" /></div>
-    ${descBlock}
-    <ul class="story-info-list">
-      <li>Автор: <a>Jane Doe</a></li>
-      <li>Статус: Ongoing</li>
-      <li>Жанр: <a>Sci-Fi</a><a>Adventure</a></li>
-    </ul>
-    <div class="chapters-list">${chapters}</div>
+    <article class="page">
+      <h1>${comic.title}</h1>
+      <h2 class="page__title-original">Original</h2>
+      <div class="page__poster"><img src="${comic.cover.startsWith('//') ? `https:${comic.cover}` : comic.cover}" /></div>
+      ${descBlock}
+      <ul class="page__list"><li><div>Статус:</div> Ongoing</li></ul>
+      <div class="page__tags"><a>Sci-Fi</a><a>Adventure</a></div>
+      <script>window.__DATA__ = ${JSON.stringify({ news_id: newsId, chapters: chaptersJson, limit: 30 })};</script>
+    </article>
   </body></html>`;
 }
 
