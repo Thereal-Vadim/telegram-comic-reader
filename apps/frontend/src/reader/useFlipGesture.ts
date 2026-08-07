@@ -381,7 +381,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
       const rawForward = rtl ? dx > 0 : dx < 0;
       const direction: TurnDirection = rawForward ? 'next' : 'prev';
 
-      const tip = pointerToTip(
+      const finger = pointerToTip(
         e.clientX,
         e.clientY,
         surfaceLeft.current,
@@ -389,15 +389,26 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
         surfaceWidth.current,
         surfaceHeight.current,
       );
+      const origin = restCorner(direction, rtl);
+      // Grow the peel from the corner toward the finger so the first frames
+      // are a small corner lift (Apple Books), not a sudden mid-page fold.
+      const dragNorm =
+        Math.hypot(dx, dy) /
+        Math.max(1, Math.hypot(surfaceWidth.current, surfaceHeight.current));
+      const grow = Math.min(1, dragNorm * 2.1 + 0.04);
+      const tipX = origin.x + (finger.x - origin.x) * grow;
+      const tipY = origin.y + (finger.y - origin.y) * grow;
 
       if (!callbacks.current.canTurn(direction)) {
-        // Resist at chapter ends — tiny peel only.
-        const origin = restCorner(direction, rtl);
-        applyTip(direction, origin.x + (tip.x - origin.x) * 0.12, origin.y + (tip.y - origin.y) * 0.12);
+        applyTip(
+          direction,
+          origin.x + (tipX - origin.x) * 0.12,
+          origin.y + (tipY - origin.y) * 0.12,
+        );
         return;
       }
 
-      applyTip(direction, tip.x, tip.y);
+      applyTip(direction, tipX, tipY);
 
       if (!crossedThreshold.current && Math.abs(s.progress) >= COMMIT_THRESHOLD) {
         crossedThreshold.current = true;

@@ -9,16 +9,15 @@ import {
   type Texture,
 } from 'three';
 import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
-import { pageFragmentShader, pageVertexShader } from './shaders';
+import { flatVertexShader, pageFragmentShader, pageVertexShader } from './shaders';
 import { progressFromTip, restCorner, tipTravel } from './pageCurlMath';
 import { stepSpring, type FlipState, type TurnDirection } from './useFlipGesture';
 
 /**
- * Scene graph for an Apple Books–style corner curl.
+ * Apple Books–style corner curl.
  *
- * Two sheets: the base shows the destination page; the top sheet carries the
- * current page on its front and the destination on its back, and deforms so
- * its corner follows the finger (or a settling spring toward complete/cancel).
+ * Base sheet stays flat (destination page + contact shadow).
+ * Top sheet alone deforms so its corner follows the finger.
  */
 
 export interface FlipSceneProps {
@@ -32,17 +31,23 @@ export interface FlipSceneProps {
   pageDim?: number;
   onTurnComplete: (direction: TurnDirection) => void;
   reducedMotion: boolean;
-  /** Reading order — needed so tip springs land on the correct rest corner. */
   rtl?: boolean;
 }
 
-function createPageMaterial(paperColor: string, pageDim: number, turning: boolean): ShaderMaterial {
+function createMaterial(
+  paperColor: string,
+  pageDim: number,
+  turning: boolean,
+): ShaderMaterial {
   return new ShaderMaterial({
-    vertexShader: pageVertexShader,
+    vertexShader: turning ? pageVertexShader : flatVertexShader,
     fragmentShader: pageFragmentShader,
     side: DoubleSide,
     transparent: true,
-    depthWrite: turning,
+    depthWrite: true,
+    polygonOffset: true,
+    polygonOffsetFactor: turning ? -1 : 1,
+    polygonOffsetUnits: turning ? -1 : 1,
     uniforms: {
       uWidth: { value: 1 },
       uHeight: { value: 1 },
@@ -85,31 +90,29 @@ export function FlipScene({
       : { pageWidth: maxW, pageHeight: maxW / aspect };
   }, [viewport.width, viewport.height, aspect]);
 
-  // Dense mesh so the cylinder crease reads as smooth paper, not facets.
   const geometry = useMemo(
-    () => new PlaneGeometry(pageWidth, pageHeight, 64, 64),
+    () => new PlaneGeometry(pageWidth, pageHeight, 48, 48),
     [pageWidth, pageHeight],
   );
-  const sheetMaterial = useMemo(() => createPageMaterial(paperColor, pageDim, true), []);
-  const baseMaterial = useMemo(() => createPageMaterial(paperColor, pageDim, false), []);
+  const sheetMaterial = useMemo(() => createMaterial(paperColor, pageDim, true), []);
+  const baseMaterial = useMemo(() => createMaterial(paperColor, pageDim, false), []);
 
   const tipVx = useRef(0);
   const tipVy = useRef(0);
-  const progressVelocity = useRef(0);
 
   useEffect(() => {
-    sheetMaterial.uniforms['uWidth']!.value = pageWidth;
-    sheetMaterial.uniforms['uHeight']!.value = pageHeight;
-    baseMaterial.uniforms['uWidth']!.value = pageWidth;
-    baseMaterial.uniforms['uHeight']!.value = pageHeight;
+    for (const mat of [sheetMaterial, baseMaterial]) {
+      mat.uniforms['uWidth']!.value = pageWidth;
+      mat.uniforms['uHeight']!.value = pageHeight;
+    }
     invalidate();
   }, [pageWidth, pageHeight, sheetMaterial, baseMaterial, invalidate]);
 
   useEffect(() => {
-    (sheetMaterial.uniforms['uPaperColor']!.value as Color).set(paperColor);
-    (baseMaterial.uniforms['uPaperColor']!.value as Color).set(paperColor);
-    sheetMaterial.uniforms['uPageDim']!.value = pageDim;
-    baseMaterial.uniforms['uPageDim']!.value = pageDim;
+    for (const mat of [sheetMaterial, baseMaterial]) {
+      (mat.uniforms['uPaperColor']!.value as Color).set(paperColor);
+      mat.uniforms['uPageDim']!.value = pageDim;
+    }
     invalidate();
   }, [paperColor, pageDim, sheetMaterial, baseMaterial, invalidate]);
 
@@ -132,10 +135,8 @@ export function FlipScene({
 
     if (!state.dragging) {
       if (state.springImpulse !== 0) {
-        // Convert progress impulse into tip velocity along X.
         tipVx.current = state.springImpulse * 0.85;
-        tipVy.current = Math.abs(state.springImpulse) * 0.12;
-        progressVelocity.current = state.springImpulse;
+        tipVy.current = Math.abs(state.springImpulse) * 0.1;
         state.springImpulse = 0;
       }
 
@@ -154,7 +155,6 @@ export function FlipScene({
     } else {
       tipVx.current = 0;
       tipVy.current = 0;
-      progressVelocity.current = 0;
     }
 
     const direction = state.direction;
@@ -165,15 +165,14 @@ export function FlipScene({
         ? currentZoomTexture
         : currentTexture;
 
-    const travel = direction
-      ? tipTravel(state.tipX, state.tipY, direction, rtl)
-      : 0;
-    const active = Math.min(1, travel * 2.2);
+    const travel = direction ? tipTravel(state.tipX, state.tipY, direction, rtl) : 0;
+    // Engage curl only after a real peel — avoids a one-frame spike.
+    const active = direction ? Math.min(1, Math.max(0, (travel - 0.03) / 0.55)) : 0;
 
-    const tipUniform = sheetMaterial.uniforms['uTip']!.value as Vector2;
-    const originUniform = sheetMaterial.uniforms['uOrigin']!.value as Vector2;
-    tipUniform.set(state.tipX, state.tipY);
-    originUniform.set(state.originX, state.originY);
+    const tip = sheetMaterial.uniforms['uTip']!.value as Vector2;
+    const origin = sheetMaterial.uniforms['uOrigin']!.value as Vector2;
+    tip.set(state.tipX, state.tipY);
+    origin.set(state.originX, state.originY);
 
     const baseTip = baseMaterial.uniforms['uTip']!.value as Vector2;
     const baseOrigin = baseMaterial.uniforms['uOrigin']!.value as Vector2;
@@ -188,16 +187,18 @@ export function FlipScene({
     } else {
       sheetMaterial.uniforms['uActive']!.value = active;
       sheetMaterial.uniforms['uOpacity']!.value = 1;
+      // Base stays flat; uActive only drives the contact-shadow in the fragment.
       baseMaterial.uniforms['uActive']!.value = active;
     }
 
+    // Current page on top; destination underneath + on the back of the curl.
     sheetMaterial.uniforms['uFront']!.value = front;
     sheetMaterial.uniforms['uHasFront']!.value = front ? 1 : 0;
     sheetMaterial.uniforms['uBack']!.value = destination;
     sheetMaterial.uniforms['uHasBack']!.value = destination ? 1 : 0;
 
-    baseMaterial.uniforms['uFront']!.value = destination;
-    baseMaterial.uniforms['uHasFront']!.value = destination ? 1 : 0;
+    baseMaterial.uniforms['uFront']!.value = destination ?? front;
+    baseMaterial.uniforms['uHasFront']!.value = destination || front ? 1 : 0;
     baseMaterial.uniforms['uBack']!.value = null;
     baseMaterial.uniforms['uHasBack']!.value = 0;
 
@@ -206,24 +207,24 @@ export function FlipScene({
     camera.zoom = state.scale;
     camera.updateProjectionMatrix();
 
-    // Turn is done when the tip has reached (or passed) its complete target.
     const tipSettled =
       Math.abs(state.tipX - state.targetTipX) < 0.02 &&
       Math.abs(state.tipY - state.targetTipY) < 0.02 &&
       Math.abs(tipVx.current) < 0.05;
+
     const completing =
       state.settling &&
-      direction &&
+      !!direction &&
       Math.abs(state.target) > 0.5 &&
       tipSettled;
 
     if (completing && !state.dragging) {
-      const turnDir: TurnDirection = direction;
+      const turnDir = direction;
       state.settling = false;
       state.progress = 0;
       state.target = 0;
       state.direction = null;
-      const rest = restCorner('next', rtl); // idle pose; unused until next drag
+      const rest = restCorner('next', rtl);
       state.tipX = rest.x;
       state.tipY = rest.y;
       state.targetTipX = rest.x;
@@ -232,7 +233,6 @@ export function FlipScene({
       state.originY = rest.y;
       tipVx.current = 0;
       tipVy.current = 0;
-      progressVelocity.current = 0;
 
       sheetMaterial.uniforms['uActive']!.value = 0;
       sheetMaterial.uniforms['uOpacity']!.value = 1;
@@ -247,7 +247,6 @@ export function FlipScene({
       onTurnComplete(turnDir);
     }
 
-    // Cancelled peel finished returning home.
     if (
       !state.dragging &&
       !state.settling &&
@@ -277,7 +276,12 @@ export function FlipScene({
   return (
     <>
       <mesh geometry={geometry} material={baseMaterial} renderOrder={0} />
-      <mesh geometry={geometry} material={sheetMaterial} renderOrder={1} position={[0, 0, 0.001]} />
+      <mesh
+        geometry={geometry}
+        material={sheetMaterial}
+        renderOrder={1}
+        position={[0, 0, 0.002]}
+      />
     </>
   );
 }
