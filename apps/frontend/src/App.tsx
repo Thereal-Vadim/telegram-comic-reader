@@ -5,6 +5,7 @@ import { HomePage } from './pages/HomePage';
 import { SearchPage } from './pages/SearchPage';
 import { ComicDetailPage } from './pages/ComicDetailPage';
 import { DownloadsPage } from './pages/DownloadsPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { useLibrary } from './store/library';
 import { downloads } from './workers/downloadManager';
 
@@ -57,6 +58,7 @@ export function App(): React.JSX.Element {
             <Route path="/comic/:id" element={<ComicDetailPage />} />
             <Route path="/read/:chapterId" element={<ReaderPage />} />
             <Route path="/downloads" element={<DownloadsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
@@ -72,6 +74,7 @@ function TabBar(): React.JSX.Element {
     { to: '/', label: 'Home' },
     { to: '/search', label: 'Search' },
     { to: '/downloads', label: 'Downloads' },
+    { to: '/settings', label: 'Sources' },
   ] as const;
 
   return (

@@ -1,4 +1,6 @@
 import dns from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import { AppError } from '@comic/shared';
 
@@ -145,70 +147,140 @@ export async function resolveSafeTarget(rawUrl: string, opts: GuardOptions): Pro
 /**
  * Fetch a validated target with the resolved address pinned.
  *
- * We rewrite the request to the literal IP and carry the original hostname in
- * the Host header (and SNI, via `servername`) so TLS still validates against
- * the real certificate while the socket goes to the address we vetted.
+ * The TCP connection goes to the address we vetted, while TLS SNI and the Host
+ * header keep the original hostname so certificates still validate. Rewriting
+ * the URL to the bare IP and calling `fetch` looks simpler but breaks TLS:
+ * undici validates the certificate against the URL hostname, which would then
+ * be an address, and archive.org (among others) fails closed.
  */
 export async function safeFetch(
   target: SafeTarget,
-  init: { headers?: Record<string, string>; timeoutMs: number; maxBytes: number },
+  init: {
+    headers?: Record<string, string>;
+    timeoutMs: number;
+    maxBytes: number;
+    /** Override Accept; archive downloads are not images. */
+    accept?: string;
+  },
 ): Promise<{ body: Buffer; contentType: string | null }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), init.timeoutMs);
+  const lib = target.url.protocol === 'https:' ? https : http;
+  const headers: Record<string, string> = {
+    ...init.headers,
+    host: target.url.host,
+    accept: init.accept ?? init.headers?.['accept'] ?? init.headers?.['Accept'] ?? 'image/*',
+  };
 
-  try {
-    const pinned = new URL(target.url.toString());
-    pinned.hostname = target.family === 6 ? `[${target.address}]` : target.address;
-
-    const res = await fetch(pinned, {
-      redirect: 'manual', // a 3xx could point anywhere; caller re-validates
-      signal: controller.signal,
-      headers: {
-        ...init.headers,
-        // Carries the real hostname so name-based virtual hosts still resolve
-        // correctly even though the socket goes to the pinned address.
-        host: target.url.host,
-        accept: 'image/*',
+  return await new Promise<{ body: Buffer; contentType: string | null }>((resolve, reject) => {
+    const req = lib.request(
+      {
+        protocol: target.url.protocol,
+        // Connect to the vetted address, not whatever DNS returns next.
+        hostname: target.address,
+        family: target.family,
+        // SNI + cert validation still use the real name.
+        servername: target.url.hostname,
+        port: target.url.port || (target.url.protocol === 'https:' ? 443 : 80),
+        path: `${target.url.pathname}${target.url.search}`,
+        method: 'GET',
+        headers,
+        timeout: init.timeoutMs,
       },
+      (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
+          const location = res.headers.location;
+          res.resume();
+          const err = Object.assign(
+            new AppError('ORIGIN_NOT_ALLOWED', 'upstream redirected; redirects are not followed'),
+            { redirectLocation: typeof location === 'string' ? location : undefined },
+          );
+          reject(err);
+          return;
+        }
+
+        if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+          res.resume();
+          reject(new AppError('UPSTREAM_UNAVAILABLE', `upstream responded ${res.statusCode ?? 0}`));
+          return;
+        }
+
+        const declared = Number(res.headers['content-length'] ?? '0');
+        if (declared > init.maxBytes) {
+          res.destroy();
+          reject(new AppError('UPSTREAM_MALFORMED', 'upstream body exceeds the size limit'));
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        let total = 0;
+        res.on('data', (chunk: Buffer) => {
+          total += chunk.byteLength;
+          if (total > init.maxBytes) {
+            res.destroy();
+            reject(new AppError('UPSTREAM_MALFORMED', 'upstream body exceeds the size limit'));
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => {
+          const contentType = res.headers['content-type'];
+          resolve({
+            body: Buffer.concat(chunks),
+            contentType: typeof contentType === 'string' ? contentType : null,
+          });
+        });
+        res.on('error', (err) => {
+          reject(new AppError('UPSTREAM_UNAVAILABLE', `upstream fetch failed: ${String(err)}`));
+        });
+      },
+    );
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new AppError('UPSTREAM_UNAVAILABLE', 'upstream timed out', 5_000));
     });
+    req.on('error', (err) => {
+      if (err instanceof AppError) reject(err);
+      else reject(new AppError('UPSTREAM_UNAVAILABLE', `upstream fetch failed: ${String(err)}`));
+    });
+    req.end();
+  });
+}
 
-    if (res.status >= 300 && res.status < 400) {
-      throw new AppError('ORIGIN_NOT_ALLOWED', 'upstream redirected; redirects are not followed');
-    }
-    if (!res.ok) {
-      throw new AppError('UPSTREAM_UNAVAILABLE', `upstream responded ${res.status}`);
-    }
+/**
+ * Follow a bounded chain of redirects, re-validating every hop.
+ *
+ * Used for hosts that front their CDN with a 302 (archive.org download URLs).
+ * Each Location is resolved through {@link resolveSafeTarget} before the next
+ * request, so a redirect into a reserved address or off the allowlist is
+ * refused the same way a direct request would be.
+ */
+export async function safeFetchFollowingRedirects(
+  rawUrl: string,
+  opts: GuardOptions,
+  init: {
+    headers?: Record<string, string>;
+    timeoutMs: number;
+    maxBytes: number;
+    accept?: string;
+    maxHops?: number;
+  },
+): Promise<{ body: Buffer; contentType: string | null }> {
+  const maxHops = init.maxHops ?? 5;
+  let current = rawUrl;
 
-    // Trust the declared length only as an early reject; still cap while reading.
-    const declared = Number(res.headers.get('content-length') ?? '0');
-    if (declared > init.maxBytes) {
-      throw new AppError('UPSTREAM_MALFORMED', 'upstream image exceeds the size limit');
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const target = await resolveSafeTarget(current, opts);
+    try {
+      return await safeFetch(target, init);
+    } catch (err) {
+      const location =
+        err instanceof AppError
+          ? (err as AppError & { redirectLocation?: string }).redirectLocation
+          : undefined;
+      if (!location || hop === maxHops) throw err;
+      current = new URL(location, current).toString();
     }
-
-    const chunks: Buffer[] = [];
-    let total = 0;
-    const reader = res.body?.getReader();
-    if (!reader) throw new AppError('UPSTREAM_MALFORMED', 'upstream returned an empty body');
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > init.maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw new AppError('UPSTREAM_MALFORMED', 'upstream image exceeds the size limit');
-      }
-      chunks.push(Buffer.from(value));
-    }
-
-    return { body: Buffer.concat(chunks), contentType: res.headers.get('content-type') };
-  } catch (err) {
-    if (err instanceof AppError) throw err;
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new AppError('UPSTREAM_UNAVAILABLE', 'upstream timed out', 5_000);
-    }
-    throw new AppError('UPSTREAM_UNAVAILABLE', `upstream fetch failed: ${String(err)}`);
-  } finally {
-    clearTimeout(timer);
   }
+
+  throw new AppError('ORIGIN_NOT_ALLOWED', 'too many upstream redirects');
 }

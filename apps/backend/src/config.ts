@@ -46,6 +46,22 @@ const RawConfig = z.object({
    */
   OPDS_CATALOGS: z.string().default(''),
 
+  /**
+   * Internet Archive public-domain / Creative Commons comics. Off by setting
+   * ARCHIVE_ORG_ENABLED=false. The adapter only surfaces items whose metadata
+   * carries an explicit open license URL.
+   */
+  ARCHIVE_ORG_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  /** Ceiling for a whole CBZ download from archive.org (pages stay under IMAGE_MAX_SOURCE_BYTES). */
+  ARCHIVE_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .min(8 * 1024 * 1024)
+    .default(150 * 1024 * 1024),
+
   /** Transcoded image cache location and ceiling. */
   IMAGE_CACHE_DIR: z.string().default(''),
   IMAGE_CACHE_MAX_BYTES: z.coerce
@@ -136,6 +152,8 @@ export interface Config {
   readonly corsOrigins: string[] | true;
   readonly localLibraryDir: string | undefined;
   readonly opdsCatalogs: OpdsCatalogConfig[];
+  readonly archiveOrgEnabled: boolean;
+  readonly archiveMaxBytes: number;
   readonly imageCacheDir: string;
   readonly imageCacheMaxBytes: number;
   readonly imageWebpQuality: number;
@@ -179,6 +197,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     corsOrigins: raw.CORS_ORIGINS === '*' ? true : csv(raw.CORS_ORIGINS),
     localLibraryDir: raw.LOCAL_LIBRARY_DIR ? path.resolve(raw.LOCAL_LIBRARY_DIR) : undefined,
     opdsCatalogs,
+    archiveOrgEnabled: raw.ARCHIVE_ORG_ENABLED,
+    archiveMaxBytes: raw.ARCHIVE_MAX_BYTES,
     imageCacheDir: path.resolve(cacheDir),
     imageCacheMaxBytes: raw.IMAGE_CACHE_MAX_BYTES,
     imageWebpQuality: raw.IMAGE_WEBP_QUALITY,

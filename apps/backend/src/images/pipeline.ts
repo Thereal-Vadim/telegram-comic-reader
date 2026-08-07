@@ -3,7 +3,7 @@ import sharp from 'sharp';
 import { AppError, VARIANT_WIDTH, type ImageVariant } from '@comic/shared';
 import type { ImageSource } from '../adapters/types.js';
 import { readZipEntry } from '../adapters/zip.js';
-import { resolveSafeTarget, safeFetch, type GuardOptions } from '../net/ssrf.js';
+import { safeFetchFollowingRedirects, type GuardOptions } from '../net/ssrf.js';
 import { ImageCache } from './cache.js';
 
 /**
@@ -52,8 +52,9 @@ async function readSource(
 
     case 'http': {
       // Re-validated here rather than trusting the adapter that produced it.
-      const target = await resolveSafeTarget(source.url, deps.guard);
-      const { body } = await safeFetch(target, {
+      // Redirects are followed with per-hop allowlist checks so hosts like
+      // archive.org that front a CDN with a 302 still work.
+      const { body } = await safeFetchFollowingRedirects(source.url, deps.guard, {
         headers: source.headers ?? {},
         timeoutMs: 15_000,
         maxBytes: deps.maxSourceBytes,

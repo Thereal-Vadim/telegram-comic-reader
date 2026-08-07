@@ -73,7 +73,7 @@ const asText = (v: string | { '#text'?: string } | undefined): string => {
 /** Injected by the registry so all outbound traffic goes through the SSRF guard. */
 export type GuardedFetch = (
   url: string,
-  headers: Record<string, string>,
+  headers?: Record<string, string>,
 ) => Promise<{ body: Buffer; contentType: string | null }>;
 
 const encodeId = (s: string): string => Buffer.from(s, 'utf8').toString('base64url');

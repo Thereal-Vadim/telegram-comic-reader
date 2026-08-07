@@ -6,7 +6,7 @@ import { AppError } from '@comic/shared';
 import { loadConfig, type Config } from './config.js';
 import { buildRegistry, type AdapterRegistry } from './adapters/registry.js';
 import { ImageCache } from './images/cache.js';
-import { resolveSafeTarget, safeFetch, type GuardOptions } from './net/ssrf.js';
+import { resolveSafeTarget, safeFetch, safeFetchFollowingRedirects, type GuardOptions } from './net/ssrf.js';
 import { registerAuthRoutes, requireSession } from './routes/auth.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerImageRoutes } from './routes/image.js';
@@ -43,12 +43,27 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     allowPrivate: cfg.allowPrivateUpstream,
   };
 
-  const guardedFetch = async (url: string, headers: Record<string, string>) => {
+  const guardedFetch = async (url: string, headers: Record<string, string> = {}) => {
     const target = await resolveSafeTarget(url, guardOptions);
-    return safeFetch(target, { headers, timeoutMs: 20_000, maxBytes: cfg.imageMaxSourceBytes });
+    return safeFetch(target, {
+      headers,
+      timeoutMs: 20_000,
+      maxBytes: cfg.imageMaxSourceBytes,
+      accept: headers['accept'] ?? headers['Accept'] ?? 'image/*',
+    });
   };
 
-  const registry = buildRegistry(cfg, guardedFetch);
+  // Archive.org CBZ downloads are large and redirect onto ia*.archive.org; they
+  // get a dedicated fetcher with a higher ceiling and hop re-validation.
+  const archiveFetch = async (url: string, headers: Record<string, string> = {}) =>
+    safeFetchFollowingRedirects(url, guardOptions, {
+      headers,
+      timeoutMs: 120_000,
+      maxBytes: cfg.archiveMaxBytes,
+      accept: headers['accept'] ?? headers['Accept'] ?? '*/*',
+    });
+
+  const registry = buildRegistry(cfg, guardedFetch, archiveFetch);
   guardOptions = { allowedHosts: registry.proxyHosts, allowPrivate: cfg.allowPrivateUpstream };
 
   const cache = new ImageCache(cfg.imageCacheDir, cfg.imageCacheMaxBytes);

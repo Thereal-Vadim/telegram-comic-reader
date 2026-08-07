@@ -13,6 +13,7 @@ import {
 import type { Config } from '../config.js';
 import { LocalAdapter } from './local.js';
 import { OpdsAdapter, type GuardedFetch } from './opds.js';
+import { ArchiveOrgAdapter } from './archiveOrg.js';
 import type { ImageSource, ProviderAdapter, SearchArgs } from './types.js';
 
 /**
@@ -242,7 +243,11 @@ export class AdapterRegistry {
 }
 
 /** Build the registry from configuration. Returns an empty registry if nothing is configured. */
-export function buildRegistry(cfg: Config, guardedFetch: GuardedFetch): AdapterRegistry {
+export function buildRegistry(
+  cfg: Config,
+  guardedFetch: GuardedFetch,
+  archiveFetch: GuardedFetch = guardedFetch,
+): AdapterRegistry {
   const adapters: ProviderAdapter[] = [];
 
   if (cfg.localLibraryDir) {
@@ -255,6 +260,17 @@ export function buildRegistry(cfg: Config, guardedFetch: GuardedFetch): AdapterR
       new OpdsAdapter(catalog, {
         fetch: guardedFetch,
         archiveDir,
+        maxEntryBytes: cfg.imageMaxSourceBytes,
+      }),
+    );
+  }
+
+  if (cfg.archiveOrgEnabled) {
+    adapters.push(
+      new ArchiveOrgAdapter({
+        fetch: guardedFetch,
+        fetchArchive: archiveFetch,
+        archiveDir: path.join(archiveDir, 'internet-archive'),
         maxEntryBytes: cfg.imageMaxSourceBytes,
       }),
     );
