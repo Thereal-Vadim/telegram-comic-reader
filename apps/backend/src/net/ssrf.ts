@@ -150,64 +150,69 @@ export async function resolveSafeTarget(rawUrl: string, opts: GuardOptions): Pro
   return { url, address: chosen.address, family: chosen.family === 6 ? 6 : 4 };
 }
 
+export interface SafeRequestInit {
+  headers?: Record<string, string>;
+  timeoutMs: number;
+  maxBytes: number;
+  /** Override Accept; archive downloads are not images. */
+  accept?: string;
+  method?: 'GET' | 'POST';
+  body?: string | Buffer;
+}
+
+export interface SafeRequestResult {
+  body: Buffer;
+  contentType: string | null;
+  statusCode: number;
+  headers: http.IncomingHttpHeaders;
+  /** Present on 3xx responses when Location was set. */
+  redirectLocation?: string;
+}
+
 /**
- * Fetch a validated target with the resolved address pinned.
+ * Low-level request to a validated target with the resolved address pinned.
+ *
+ * Returns any HTTP status (including 3xx / 4xx) so callers can handle redirects,
+ * anti-bot challenges, and login walls themselves. Connection / size failures
+ * still throw {@link AppError}.
  *
  * The TCP connection goes to the address we vetted, while TLS SNI and the Host
- * header keep the original hostname so certificates still validate. Rewriting
- * the URL to the bare IP and calling `fetch` looks simpler but breaks TLS:
- * undici validates the certificate against the URL hostname, which would then
- * be an address, and archive.org (among others) fails closed.
+ * header keep the original hostname so certificates still validate.
  */
-export async function safeFetch(
+export async function safeRequest(
   target: SafeTarget,
-  init: {
-    headers?: Record<string, string>;
-    timeoutMs: number;
-    maxBytes: number;
-    /** Override Accept; archive downloads are not images. */
-    accept?: string;
-  },
-): Promise<{ body: Buffer; contentType: string | null }> {
+  init: SafeRequestInit,
+): Promise<SafeRequestResult> {
   const lib = target.url.protocol === 'https:' ? https : http;
+  const method = init.method ?? 'GET';
+  const bodyBuf =
+    init.body === undefined ? undefined : Buffer.isBuffer(init.body) ? init.body : Buffer.from(init.body);
   const headers: Record<string, string> = {
     ...init.headers,
     host: target.url.host,
     accept: init.accept ?? init.headers?.['accept'] ?? init.headers?.['Accept'] ?? 'image/*',
   };
+  if (bodyBuf) {
+    headers['content-length'] = String(bodyBuf.byteLength);
+  }
 
-  return await new Promise<{ body: Buffer; contentType: string | null }>((resolve, reject) => {
+  return await new Promise<SafeRequestResult>((resolve, reject) => {
     const req = lib.request(
       {
         protocol: target.url.protocol,
-        // Connect to the vetted address, not whatever DNS returns next.
         hostname: target.address,
         family: target.family,
-        // SNI + cert validation still use the real name.
         servername: target.url.hostname,
         port: target.url.port || (target.url.protocol === 'https:' ? 443 : 80),
         path: `${target.url.pathname}${target.url.search}`,
-        method: 'GET',
+        method,
         headers,
         timeout: init.timeoutMs,
       },
       (res) => {
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-          const location = res.headers.location;
-          res.resume();
-          const err = Object.assign(
-            new AppError('ORIGIN_NOT_ALLOWED', 'upstream redirected; redirects are not followed'),
-            { redirectLocation: typeof location === 'string' ? location : undefined },
-          );
-          reject(err);
-          return;
-        }
-
-        if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
-          res.resume();
-          reject(new AppError('UPSTREAM_UNAVAILABLE', `upstream responded ${res.statusCode ?? 0}`));
-          return;
-        }
+        const statusCode = res.statusCode ?? 0;
+        const location = res.headers.location;
+        const redirectLocation = typeof location === 'string' ? location : undefined;
 
         const declared = Number(res.headers['content-length'] ?? '0');
         if (declared > init.maxBytes) {
@@ -232,6 +237,9 @@ export async function safeFetch(
           resolve({
             body: Buffer.concat(chunks),
             contentType: typeof contentType === 'string' ? contentType : null,
+            statusCode,
+            headers: res.headers,
+            ...(redirectLocation ? { redirectLocation } : {}),
           });
         });
         res.on('error', (err) => {
@@ -248,8 +256,36 @@ export async function safeFetch(
       if (err instanceof AppError) reject(err);
       else reject(new AppError('UPSTREAM_UNAVAILABLE', `upstream fetch failed: ${String(err)}`));
     });
+    if (bodyBuf) req.write(bodyBuf);
     req.end();
   });
+}
+
+/**
+ * Fetch a validated target with the resolved address pinned.
+ *
+ * Rejects on redirects and non-2xx so image/OPDS callers stay strict. For
+ * HTML adapters that must handle anti-bot challenges, use {@link safeRequest}.
+ */
+export async function safeFetch(
+  target: SafeTarget,
+  init: SafeRequestInit,
+): Promise<{ body: Buffer; contentType: string | null }> {
+  const result = await safeRequest(target, init);
+
+  if (result.statusCode >= 300 && result.statusCode < 400) {
+    const err = Object.assign(
+      new AppError('ORIGIN_NOT_ALLOWED', 'upstream redirected; redirects are not followed'),
+      { redirectLocation: result.redirectLocation },
+    );
+    throw err;
+  }
+
+  if (result.statusCode < 200 || result.statusCode >= 300) {
+    throw new AppError('UPSTREAM_UNAVAILABLE', `upstream responded ${result.statusCode}`);
+  }
+
+  return { body: result.body, contentType: result.contentType };
 }
 
 /**

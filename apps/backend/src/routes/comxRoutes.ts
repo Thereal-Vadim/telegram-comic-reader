@@ -1,19 +1,36 @@
 import type { FastifyInstance } from 'fastify';
-import { AppError } from '@comic/shared';
+import { AppError, ComxConnectRequest, ComxSessionStatus } from '@comic/shared';
 import type { ComxAdapter } from '../adapters/comxAdapter.js';
 
 /**
- * Dedicated com-x.life endpoints (catalog / search / comic / chapter).
+ * Dedicated com-x.life endpoints (session / catalog / search / comic / chapter).
  *
  * The same adapter also implements ProviderAdapter, so Home / Search / Reader
  * work through the normal `/api/home`, `/api/search`, `/api/comics/:id` routes.
- * These paths are for direct clients and debugging.
+ * These paths are for direct clients and connecting an account from the Mini App.
  */
 export function registerComxRoutes(
   app: FastifyInstance,
   adapter: ComxAdapter,
   guard: (req: import('fastify').FastifyRequest) => Promise<void>,
 ): void {
+  app.get('/api/comx/session', { preHandler: guard }, async (_request, reply) => {
+    return reply.send(ComxSessionStatus.parse(adapter.sessionStatus()));
+  });
+
+  app.post('/api/comx/session', { preHandler: guard }, async (request, reply) => {
+    const parsed = ComxConnectRequest.safeParse(request.body);
+    if (!parsed.success) {
+      throw new AppError('BAD_REQUEST', `invalid comx credentials: ${parsed.error.message}`);
+    }
+    const status = await adapter.connectAccount(parsed.data);
+    return reply.send(ComxSessionStatus.parse(status));
+  });
+
+  app.delete('/api/comx/session', { preHandler: guard }, async (_request, reply) => {
+    return reply.send(ComxSessionStatus.parse(adapter.disconnectAccount()));
+  });
+
   app.get('/api/comx/catalog', { preHandler: guard }, async (request, reply) => {
     const query = request.query as { page?: string; category?: string };
     const pageNum = Number.parseInt(query.page || '1', 10);
@@ -27,7 +44,7 @@ export function registerComxRoutes(
   app.get('/api/comx/search', { preHandler: guard }, async (request, reply) => {
     const query = request.query as { q?: string; page?: string };
     if (!query.q?.trim()) {
-      throw new AppError('BAD_REQUEST', 'query parameter "q" is required');
+      return reply.send({ items: [], currentPage: 1, totalPages: 1, hasNextPage: false });
     }
     const pageNum = Number.parseInt(query.page || '1', 10);
     if (!Number.isFinite(pageNum) || pageNum < 1) {

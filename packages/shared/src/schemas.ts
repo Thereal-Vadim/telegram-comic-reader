@@ -185,6 +185,23 @@ export const AdapterListResponse = z.object({ adapters: z.array(AdapterInfo) });
 export type AdapterListResponse = z.infer<typeof AdapterListResponse>;
 
 /* -------------------------------------------------------------------------- */
+/* com-x.life session                                                         */
+/* -------------------------------------------------------------------------- */
+
+export const ComxSessionStatus = z.object({
+  connected: z.boolean(),
+  login: z.string().nullable(),
+  cookieCount: z.number().int().nonnegative(),
+});
+export type ComxSessionStatus = z.infer<typeof ComxSessionStatus>;
+
+export const ComxConnectRequest = z.object({
+  login: z.string().trim().min(1).max(128),
+  password: z.string().min(1).max(256),
+});
+export type ComxConnectRequest = z.infer<typeof ComxConnectRequest>;
+
+/* -------------------------------------------------------------------------- */
 /* Auth                                                                       */
 /* -------------------------------------------------------------------------- */
 
