@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { ComicSummary, HomeFeedResponse } from '@comic/shared';
+import { bootStage, bootWarn } from '../boot/log';
 import { api } from '../api/client';
+import { BootScreen } from '../components/BootScreen';
 import { CoverImage } from '../components/CoverImage';
-import { EmptyState, ErrorState, Spinner } from '../components/states';
+import { EmptyState, ErrorState } from '../components/states';
 import { useLibrary } from '../store/library';
 import { useHaptics } from '../telegram/hooks';
 import { db } from '../db/schema';
@@ -27,6 +29,7 @@ export function HomePage(): React.JSX.Element {
     setLoading(true);
     setError(null);
     setOfflineFallback(false);
+    bootStage('home-ui', 'Loading Home shelves');
 
     try {
       const response = await api.home();
@@ -43,8 +46,10 @@ export function HomePage(): React.JSX.Element {
         .catch(() => undefined);
     } catch (err) {
       // Before surfacing the error, see whether we can serve from cache.
+      bootStage('home-ui', 'Home failed — checking offline cache');
       const cached = await db.comics.orderBy('cachedAt').reverse().limit(40).toArray();
       if (cached.length > 0) {
+        bootWarn('home-ui', `Showing ${cached.length} cached comics offline`);
         setFeed({
           hero: cached.slice(0, 6),
           shelves: [{ id: 'cached', title: 'Available offline', items: cached }],
@@ -64,7 +69,9 @@ export function HomePage(): React.JSX.Element {
     void load();
   }, [hydrate, load]);
 
-  if (loading && !feed) return <Spinner label="Loading your library" />;
+  if (loading && !feed) {
+    return <BootScreen title="Loading library" subtitle="Fetching popular comics…" />;
+  }
   if (error && !feed) return <ErrorState error={error} onRetry={load} />;
   if (!feed) return <EmptyState title="Nothing here yet" />;
 

@@ -140,11 +140,23 @@ export const PageListResponse = z.object({
 export const AdapterInfo = z.object({
     id: AdapterId,
     label: z.string(),
-    kind: z.enum(['local', 'opds']),
+    kind: z.enum(['local', 'opds', 'comx']),
     /** False when the adapter is configured but its source is unreachable. */
     healthy: z.boolean(),
 });
 export const AdapterListResponse = z.object({ adapters: z.array(AdapterInfo) });
+/* -------------------------------------------------------------------------- */
+/* com-x.life session                                                         */
+/* -------------------------------------------------------------------------- */
+export const ComxSessionStatus = z.object({
+    connected: z.boolean(),
+    login: z.string().nullable(),
+    cookieCount: z.number().int().nonnegative(),
+});
+export const ComxConnectRequest = z.object({
+    login: z.string().trim().min(1).max(128),
+    password: z.string().min(1).max(256),
+});
 /* -------------------------------------------------------------------------- */
 /* Auth                                                                       */
 /* -------------------------------------------------------------------------- */

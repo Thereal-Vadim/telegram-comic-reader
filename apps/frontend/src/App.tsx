@@ -1,5 +1,7 @@
 import { Suspense, lazy, useEffect } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { bootOk, bootStage } from './boot/log';
+import { BootScreen } from './components/BootScreen';
 import { Spinner } from './components/states';
 import { HomePage } from './pages/HomePage';
 import { SearchPage } from './pages/SearchPage';
@@ -26,7 +28,8 @@ export function App(): React.JSX.Element {
   const location = useLocation();
 
   useEffect(() => {
-    void hydrate();
+    bootStage('indexeddb', 'Reading favourites and progress');
+    void hydrate().then(() => bootOk('indexeddb', 'local library ready'));
     // Picks up anything interrupted by the previous session closing.
     void downloads.restore();
   }, [hydrate]);
@@ -41,11 +44,7 @@ export function App(): React.JSX.Element {
   // comic the user has favourited — worse, a tap in that window is silently
   // undone the moment hydration lands and replaces the store.
   if (!hydrated) {
-    return (
-      <div className="flex min-h-viewport flex-col bg-tg-bg text-tg-text">
-        <Spinner label="Loading your library" />
-      </div>
-    );
+    return <BootScreen title="Starting app" subtitle="Opening local library…" />;
   }
 
   return (

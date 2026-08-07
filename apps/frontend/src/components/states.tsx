@@ -133,6 +133,9 @@ export function ErrorState({
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
       <h3 className="text-base font-semibold text-tg-destructive">{advice.title}</h3>
       <p className="max-w-sm text-sm text-tg-hint">{advice.description}</p>
+      {error instanceof Error && error.message !== advice.description && (
+        <p className="max-w-sm font-mono text-[11px] text-tg-subtitle">{error.message}</p>
+      )}
       {advice.canRetry && onRetry && (
         <button
           type="button"
