@@ -233,6 +233,7 @@ export class LocalAdapter implements ProviderAdapter {
         volume: null,
         pageCount: entries.length,
         publishedAt: stat.mtime.toISOString(),
+        coverUrl: null,
       });
     } else {
       const archives = await this.#listArchives(relPath);
@@ -263,6 +264,7 @@ export class LocalAdapter implements ProviderAdapter {
           volume: null,
           pageCount: entries.length,
           publishedAt: st ? st.mtime.toISOString() : null,
+          coverUrl: null,
         });
       }
     }

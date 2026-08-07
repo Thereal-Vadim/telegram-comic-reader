@@ -3,6 +3,7 @@ import {
   AdapterListResponse,
   AuthResponse,
   ChapterListResponse,
+  ChapterPreviewResponse,
   ComxSessionStatus,
   HomeFeedResponse,
   PageListResponse,
@@ -246,6 +247,13 @@ export class ApiClient {
 
   pages(chapterId: string): Promise<PageListResponse> {
     return this.#request(`/api/chapters/${encodeURIComponent(chapterId)}/pages`, PageListResponse);
+  }
+
+  chapterPreview(chapterId: string): Promise<ChapterPreviewResponse> {
+    return this.#request(
+      `/api/chapters/${encodeURIComponent(chapterId)}/preview`,
+      ChapterPreviewResponse,
+    );
   }
 
   comxSession(): Promise<ComxSessionStatus> {

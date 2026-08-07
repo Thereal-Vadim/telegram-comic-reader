@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   AppError,
   ChapterListResponse,
+  ChapterPreviewResponse,
   HomeFeedResponse,
   NamespacedId,
   PageListResponse,
@@ -80,6 +81,18 @@ export function registerCatalogRoutes(
 
       const pages = await registry.getPages(id.data);
       return reply.send(PageListResponse.parse({ chapterId: id.data, pages }));
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    '/api/chapters/:id/preview',
+    { preHandler: guard },
+    async (request, reply) => {
+      const id = NamespacedId.safeParse(decodeURIComponent(request.params.id));
+      if (!id.success) throw new AppError('BAD_REQUEST', 'malformed chapter id');
+
+      const preview = await registry.getChapterPreview(id.data);
+      return reply.send(ChapterPreviewResponse.parse(preview));
     },
   );
 }

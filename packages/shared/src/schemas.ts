@@ -97,8 +97,22 @@ export const Chapter = z.object({
   volume: z.number().int().nullable().default(null),
   pageCount: z.number().int().nonnegative(),
   publishedAt: z.iso.datetime().nullable().default(null),
+  /**
+   * First-page / issue cover proxy URL when the source (or a later preview
+   * fetch) has one. Null on list responses that have not resolved a preview yet.
+   */
+  coverUrl: z.string().nullable().default(null),
 });
 export type Chapter = z.infer<typeof Chapter>;
+
+export const ChapterPreviewResponse = z.object({
+  chapterId: NamespacedId,
+  title: z.string().optional(),
+  pageCount: z.number().int().nonnegative(),
+  /** Proxy URL for the first page (issue cover), thumb-ready. */
+  coverUrl: z.string().nullable(),
+});
+export type ChapterPreviewResponse = z.infer<typeof ChapterPreviewResponse>;
 
 export const PageRef = z.object({
   id: NamespacedId,

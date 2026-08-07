@@ -50,6 +50,55 @@ export interface ChapterItem {
   url: string;
   dateAdded?: string;
   chapterNumber?: number;
+  volume?: number;
+  pageCount?: number;
+}
+
+/** Turn bare "# 163" style labels into readable issue titles. */
+export function formatComxChapterTitle(ch: {
+  title?: string;
+  number?: number;
+  volume?: number;
+  posi?: number;
+}): string {
+  const raw = (ch.title || '').replace(/\s+/g, ' ').trim();
+  const issueNo = ch.number && ch.number > 0 ? ch.number : undefined;
+  const vol = ch.volume && ch.volume > 0 ? ch.volume : undefined;
+
+  const hashOnly = raw.match(/^#\s*(\d+)\s*$/);
+  if (hashOnly) {
+    const n = hashOnly[1];
+    return vol ? `Том ${vol} · Выпуск № ${n}` : `Выпуск № ${n}`;
+  }
+
+  if (raw) {
+    // "# 51 Annual" → "Выпуск № 51 Annual"; leave narrative titles alone.
+    const wasHashIssue = /^#\s*\d+/.test(raw);
+    const normalized = raw.replace(/^#\s*(\d+)\b/, 'Выпуск № $1');
+    if (vol && wasHashIssue && !/том\s*\d+/i.test(normalized)) {
+      return `Том ${vol} · ${normalized}`;
+    }
+    return normalized;
+  }
+
+  if (issueNo !== undefined) {
+    return vol ? `Том ${vol} · Выпуск № ${issueNo}` : `Выпуск № ${issueNo}`;
+  }
+  if (ch.posi !== undefined) return `Выпуск ${ch.posi}`;
+  return 'Выпуск';
+}
+
+function parseComxDate(raw: string | undefined): string | null {
+  if (!raw) return null;
+  // "5.06.2026" or "05.06.2026"
+  const m = raw.trim().match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  const year = Number(m[3]);
+  if (!day || !month || !year) return null;
+  const iso = new Date(Date.UTC(year, month - 1, day)).toISOString();
+  return iso;
 }
 
 export interface ComicDetails {
@@ -508,6 +557,8 @@ export class ComxAdapter implements ProviderAdapter {
             title?: string;
             number?: number;
             posi?: number;
+            pages?: number;
+            volume?: number;
             date?: string;
           }>;
         };
@@ -515,12 +566,16 @@ export class ComxAdapter implements ProviderAdapter {
         for (const ch of data.chapters ?? []) {
           if (newsId === undefined || ch.id === undefined) continue;
           const chUrl = this.fixUrl(`/reader/${newsId}/${ch.id}`);
+          const volume = Number(ch.volume);
+          const pageCount = Number(ch.pages);
           chapters.push({
             id: String(ch.id),
-            title: (ch.title || `Глава ${ch.posi ?? chapters.length + 1}`).trim(),
+            title: formatComxChapterTitle(ch),
             url: chUrl,
             ...(ch.date ? { dateAdded: ch.date } : {}),
             chapterNumber: Number(ch.number ?? ch.posi ?? chapters.length + 1),
+            ...(Number.isFinite(volume) && volume > 0 ? { volume } : {}),
+            ...(Number.isFinite(pageCount) && pageCount > 0 ? { pageCount } : {}),
           });
         }
       } catch {
@@ -538,7 +593,11 @@ export class ComxAdapter implements ProviderAdapter {
           if (!chHref || chHref === '#') return;
           chapters.push({
             id: this.extractIdFromUrl(chHref),
-            title: chTitle.replace(/\s+/g, ' ').trim(),
+            title: formatComxChapterTitle({
+              title: chTitle,
+              number: chapters.length + 1,
+              posi: chapters.length + 1,
+            }),
             url: this.fixUrl(chHref),
             ...(chDate ? { dateAdded: chDate } : {}),
             chapterNumber: chapters.length + 1,
@@ -581,11 +640,54 @@ export class ComxAdapter implements ProviderAdapter {
     const $ = cheerio.load(html);
 
     const pages: string[] = [];
+    let title: string | undefined;
 
-    $('.reader-images img, .read-comic img, #comic-pages img, .page-image').each((_, el) => {
-      const src = $(el).attr('data-src') || $(el).attr('src') || $(el).attr('data-original');
-      if (src) pages.push(this.fixUrl(src));
-    });
+    // Modern reader: Vue shell + window.__DATA__.{images,host,pages}.
+    const dataMatch = html.match(/window\.__DATA__\s*=\s*(\{[\s\S]*?\});/);
+    if (dataMatch?.[1]) {
+      try {
+        const data = JSON.parse(dataMatch[1]) as {
+          images?: unknown;
+          host?: string;
+          host_ru?: string;
+          pages?: number;
+          chapter_id?: number | string;
+          chapters?: Array<{ id?: number | string; title?: string }>;
+        };
+        const host = (data.host || data.host_ru || 'img.com-x.life').replace(/^https?:\/\//, '');
+        if (Array.isArray(data.images)) {
+          for (const entry of data.images) {
+            if (typeof entry !== 'string' || !entry.trim()) continue;
+            if (/^https?:\/\//i.test(entry) || entry.startsWith('//')) {
+              pages.push(this.fixUrl(entry));
+            } else {
+              const path = entry.replace(/^\/+/, '');
+              pages.push(`https://${host}/comix/${path.replace(/^comix\//, '')}`);
+            }
+          }
+        }
+        const current = data.chapters?.find((c) => String(c.id) === String(data.chapter_id));
+        if (current?.title) title = formatComxChapterTitle(current);
+      } catch {
+        // Fall through to DOM / legacy script scraping.
+      }
+    }
+
+    if (pages.length === 0) {
+      const firstImage =
+        html.match(/window\.__FIRST_IMAGE__\s*=\s*'([^']+)'/)?.[1] ||
+        html.match(/"image"\s*:\s*"(https:[^"]+\.(?:jpe?g|png|webp))"/i)?.[1];
+      if (firstImage) pages.push(this.fixUrl(firstImage));
+    }
+
+    if (pages.length === 0) {
+      $(
+        '.reader-images img, .read-comic img, #comic-pages img, .page-image, #ssr-first-image',
+      ).each((_, el) => {
+        const src = $(el).attr('data-src') || $(el).attr('src') || $(el).attr('data-original');
+        if (src) pages.push(this.fixUrl(src));
+      });
+    }
 
     if (pages.length === 0) {
       const scripts = $('script')
@@ -614,7 +716,10 @@ export class ComxAdapter implements ProviderAdapter {
       throw new AppError('UPSTREAM_MALFORMED', 'no page images found on that com-x chapter');
     }
 
-    const title = $('.chapter-title, .reader-header h1').text().trim() || undefined;
+    title =
+      title ||
+      $('.chapter-title, .reader-header h1, title').first().text().trim() ||
+      undefined;
 
     return {
       chapterId: this.extractIdFromUrl(fullUrl),
@@ -690,9 +795,10 @@ export class ComxAdapter implements ProviderAdapter {
       comicId,
       number: ch.chapterNumber ?? index + 1,
       title: ch.title,
-      volume: null,
-      pageCount: 0,
-      publishedAt: null,
+      volume: ch.volume ?? null,
+      pageCount: ch.pageCount ?? 0,
+      publishedAt: parseComxDate(ch.dateAdded),
+      coverUrl: null,
     }));
   }
 
@@ -707,6 +813,22 @@ export class ComxAdapter implements ProviderAdapter {
       height: null,
       source: { kind: 'http' as const, url: pageUrl, headers: this.#httpHeaders() },
     }));
+  }
+
+  /**
+   * First page of a chapter — used as the issue cover in the chapter grid.
+   * Reuses the chapter HTML parse (and short-lived detail cache upstream).
+   */
+  async getChapterPreview(
+    chapterId: string,
+  ): Promise<{ coverUrl: string | null; pageCount: number; title?: string }> {
+    const url = decodeId(chapterId);
+    const result = await this.getChapterPages(url);
+    return {
+      coverUrl: result.pages[0] ?? null,
+      pageCount: result.totalPages,
+      ...(result.title ? { title: result.title } : {}),
+    };
   }
 
   async resolveImage(ref: string): Promise<ImageSource> {

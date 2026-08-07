@@ -6,6 +6,7 @@ import { Spinner } from './components/states';
 import { HomePage } from './pages/HomePage';
 import { SearchPage } from './pages/SearchPage';
 import { ComicDetailPage } from './pages/ComicDetailPage';
+import { ChapterPage } from './pages/ChapterPage';
 import { DownloadsPage } from './pages/DownloadsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { useLibrary } from './store/library';
@@ -34,9 +35,9 @@ export function App(): React.JSX.Element {
     void downloads.restore();
   }, [hydrate]);
 
-  // The reader is full-bleed and supplies its own controls, so the tab bar is
-  // hidden there rather than overlapping the page.
-  const isReader = location.pathname.startsWith('/read/');
+  // Reader is full-bleed; chapter hub keeps a sticky action bar — hide tabs on both.
+  const hideTabs =
+    location.pathname.startsWith('/read/') || location.pathname.startsWith('/chapter/');
 
   // Nothing renders until favourites and progress are read back from Dexie.
   // The first IndexedDB open on a cold start can take longer than the first
@@ -55,6 +56,7 @@ export function App(): React.JSX.Element {
             <Route path="/" element={<HomePage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/comic/:id" element={<ComicDetailPage />} />
+            <Route path="/chapter/:chapterId" element={<ChapterPage />} />
             <Route path="/read/:chapterId" element={<ReaderPage />} />
             <Route path="/downloads" element={<DownloadsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
@@ -63,7 +65,7 @@ export function App(): React.JSX.Element {
         </Suspense>
       </main>
 
-      {!isReader && <TabBar />}
+      {!hideTabs && <TabBar />}
     </div>
   );
 }

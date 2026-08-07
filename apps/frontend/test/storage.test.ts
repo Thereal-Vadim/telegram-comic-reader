@@ -27,6 +27,7 @@ async function seedChapter(args: {
     volume: null,
     pageCount: args.pages,
     publishedAt: null,
+    coverUrl: null,
     downloadedAt: Date.now(),
     bytes: args.bytes,
   });
@@ -89,6 +90,7 @@ describe('database schema', () => {
       volume: null,
       pageCount: 20,
       publishedAt: null,
+      coverUrl: null,
       // No downloadedAt: pages exist but the chapter is not readable offline.
     });
 
@@ -168,6 +170,7 @@ describe('eviction ordering', () => {
       volume: null,
       pageCount: 10,
       publishedAt: null,
+      coverUrl: null,
     });
 
     expect(await candidatesInEvictionOrder()).toEqual([]);
