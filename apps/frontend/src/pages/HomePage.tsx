@@ -73,7 +73,7 @@ export function HomePage(): React.JSX.Element {
     return (
       <EmptyState
         title="Library is empty"
-        description="Configure LOCAL_LIBRARY_DIR or OPDS_CATALOGS on the server (see the Library tab), then restart. The app only shows comics from sources you set yourself."
+        description="Enable a source on the server (LOCAL_LIBRARY_DIR, OPDS_CATALOGS, or COMX_ENABLED with COMX_LOGIN/COMX_PASSWORD), then restart."
       />
     );
   }

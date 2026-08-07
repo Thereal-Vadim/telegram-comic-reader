@@ -49,16 +49,24 @@ export function solveComxPow(token: string): { nonce: number; hash: string } {
   }
 }
 
-function parseSetCookie(header: string | string[] | undefined): Array<{ name: string; value: string }> {
+function parseSetCookie(
+  header: string | string[] | undefined,
+): Array<{ name: string; value: string; deleted?: boolean }> {
   if (!header) return [];
   const lines = Array.isArray(header) ? header : [header];
-  const out: Array<{ name: string; value: string }> = [];
+  const out: Array<{ name: string; value: string; deleted?: boolean }> = [];
   for (const line of lines) {
     const first = line.split(';')[0]?.trim();
     if (!first) continue;
     const eq = first.indexOf('=');
     if (eq <= 0) continue;
-    out.push({ name: first.slice(0, eq), value: first.slice(eq + 1) });
+    const name = first.slice(0, eq);
+    const value = first.slice(eq + 1);
+    const deleted =
+      value === 'deleted' ||
+      /expires=Thu,\s*01[-\s]Jan[-\s]1970/i.test(line) ||
+      /Max-Age=0/i.test(line);
+    out.push({ name, value, ...(deleted ? { deleted: true } : {}) });
   }
   return out;
 }
@@ -226,8 +234,9 @@ export class ComxSession {
   }
 
   #absorbCookies(setCookie: string | string[] | undefined): void {
-    for (const { name, value } of parseSetCookie(setCookie)) {
-      this.#cookies.set(name, value);
+    for (const cookie of parseSetCookie(setCookie)) {
+      if (cookie.deleted) this.#cookies.delete(cookie.name);
+      else this.#cookies.set(cookie.name, cookie.value);
     }
   }
 
@@ -300,12 +309,22 @@ export class ComxSession {
       );
     }
 
+    // Load the gate page (after PoW) so we can pick up dle_login_hash + session.
+    const gate = await this.request(refererUrl || `${BASE_URL}/`, {
+      skipAuth: true,
+    });
+    const gateHtml = gate.body.toString('utf8');
+    const csrf =
+      gateHtml.match(/window\.dle_login_hash\s*=\s*['"]([^'"]+)['"]/)?.[1] ??
+      gateHtml.match(/name=["']dle_login_hash["'][^>]*value=["']([^"']+)["']/)?.[1] ??
+      '';
+
     const form = new URLSearchParams({
       login_name: this.#credentials.login,
       login_password: this.#credentials.password,
       login: 'submit',
-      login_not_save: '1',
     });
+    if (csrf) form.set('dle_login_hash', csrf);
 
     const result = await this.request(`${BASE_URL}/`, {
       method: 'POST',
@@ -314,7 +333,7 @@ export class ComxSession {
         ...BROWSER_HEADERS,
         'content-type': 'application/x-www-form-urlencoded',
         origin: BASE_URL,
-        referer: refererUrl,
+        referer: refererUrl || `${BASE_URL}/`,
       },
       skipAuth: true,
     });
@@ -323,7 +342,7 @@ export class ComxSession {
     if (result.statusCode === 401 || isLoginWallHtml(html)) {
       throw new AppError(
         'UPSTREAM_UNAVAILABLE',
-        'comx login failed: check COMX_LOGIN / COMX_PASSWORD',
+        'comx login rejected by site (HTTP 401). Verify COMX_LOGIN / COMX_PASSWORD on com-x.life',
       );
     }
     this.#loginOk = true;

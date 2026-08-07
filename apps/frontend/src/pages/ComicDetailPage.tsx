@@ -8,16 +8,13 @@ import { db, type DownloadTask } from '../db/schema';
 import { StorageQuotaError, deleteChapterPages } from '../db/storage';
 import { downloads } from '../workers/downloadManager';
 import { useLibrary } from '../store/library';
-import { useBackButton, useHaptics, useMainButton } from '../telegram/hooks';
+import { useBackButton, useHaptics } from '../telegram/hooks';
 import { getWebApp } from '../telegram/webapp';
 
 /**
- * Comic detail: metadata, chapter list, per-chapter download state.
- *
- * The native MainButton is bound to the primary action, which changes with
- * context: "Start reading" for a comic never opened, "Continue chapter N" once
- * there is progress. Telegram users expect that button to do the obvious
- * thing, so it tracks the same action the list would.
+ * Comic detail: cover, optional description, chapter list, and a sticky
+ * Read / Download action bar. Description is omitted entirely when the source
+ * does not provide one.
  */
 export function ComicDetailPage(): React.JSX.Element {
   const { id } = useParams<{ id: string }>();
@@ -112,17 +109,6 @@ export function ComicDetailPage(): React.JSX.Element {
     [navigate, impact],
   );
 
-  useMainButton(
-    resumeTarget
-      ? {
-          text: lastRead
-            ? `Continue ${resumeTarget.chapter.title}`.slice(0, 64)
-            : 'Start reading',
-          onClick: () => openChapter(resumeTarget.chapter.id, resumeTarget.page),
-        }
-      : null,
-  );
-
   const download = useCallback(
     async (chapter: Chapter) => {
       if (!comic) return;
@@ -152,6 +138,14 @@ export function ComicDetailPage(): React.JSX.Element {
     [comic, impact, notify],
   );
 
+  const readLabel = lastRead ? 'Continue' : 'Read';
+
+  const primaryChapter = resumeTarget?.chapter ?? null;
+  const primaryDownloaded = primaryChapter
+    ? downloadedIds.has(primaryChapter.id)
+    : false;
+  const primaryTask = primaryChapter ? taskByChapter.get(primaryChapter.id) : undefined;
+
   const removeDownload = useCallback(
     async (chapterId: string) => {
       await deleteChapterPages(chapterId);
@@ -169,83 +163,128 @@ export function ComicDetailPage(): React.JSX.Element {
   if (error && !comic) return <ErrorState error={error} onRetry={load} />;
   if (!comic) return <ErrorState error={new Error('Comic not found')} />;
 
+  const description = comic.description.trim();
+
   return (
-    <div className="pb-32">
-      <header className="flex gap-4 px-4 pt-4">
-        <CoverImage src={comic.coverUrl} alt={comic.title} eager className="w-28 shrink-0" />
+    <div className="flex min-h-full flex-col pb-28">
+      <div className="flex-1 overflow-y-auto">
+        <header className="flex gap-4 px-4 pt-4">
+          <CoverImage src={comic.coverUrl} alt={comic.title} eager className="w-28 shrink-0" />
 
-        <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-bold leading-tight text-tg-text">{comic.title}</h1>
-          {comic.authors.length > 0 && (
-            <p className="mt-1 text-sm text-tg-hint">{comic.authors.join(', ')}</p>
-          )}
-          <p className="mt-1 text-xs text-tg-hint">
-            {chapters.length} {chapters.length === 1 ? 'chapter' : 'chapters'}
-            {comic.status !== 'unknown' && ` · ${comic.status}`}
+          <div className="min-w-0 flex-1">
+            <h1 className="text-lg font-bold leading-tight text-tg-text">{comic.title}</h1>
+            {comic.authors.length > 0 && (
+              <p className="mt-1 text-sm text-tg-hint">{comic.authors.join(', ')}</p>
+            )}
+            <p className="mt-1 text-xs text-tg-hint">
+              {chapters.length} {chapters.length === 1 ? 'chapter' : 'chapters'}
+              {comic.status !== 'unknown' && ` · ${comic.status}`}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                impact('light');
+                void toggleFavorite(comic.id);
+              }}
+              aria-pressed={isFavorite}
+              className={`mt-3 rounded-lg px-4 py-1.5 text-sm font-medium ${
+                isFavorite
+                  ? 'bg-tg-button text-tg-button-text'
+                  : 'bg-tg-secondary-bg text-tg-text'
+              }`}
+            >
+              {isFavorite ? 'In favourites' : 'Add to favourites'}
+            </button>
+          </div>
+        </header>
+
+        {description ? (
+          <p className="mt-4 max-h-48 overflow-y-auto px-4 text-sm leading-relaxed text-tg-hint">
+            {description}
           </p>
+        ) : null}
 
+        <section className="mt-6">
+          <h2 className="px-4 pb-2 text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+            Chapters
+          </h2>
+
+          <ul className="divide-y divide-white/5">
+            {chapters.map((chapter) => {
+              const task = taskByChapter.get(chapter.id);
+              const isDownloaded = downloadedIds.has(chapter.id);
+              const progress = progressByChapter.get(chapter.id);
+
+              return (
+                <li key={chapter.id} className="flex items-center gap-3 px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => openChapter(chapter.id, progress?.pageIndex ?? 0)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <p className="truncate text-sm text-tg-text">{chapter.title}</p>
+                    <p className="text-xs text-tg-hint">
+                      {chapter.pageCount > 0 ? `${chapter.pageCount} pages` : 'Tap to load'}
+                      {progress &&
+                        progress.pageCount > 0 &&
+                        ` · ${Math.round(((progress.pageIndex + 1) / progress.pageCount) * 100)}% read`}
+                    </p>
+                  </button>
+
+                  <ChapterDownloadButton
+                    task={task}
+                    downloaded={isDownloaded}
+                    onDownload={() => void download(chapter)}
+                    onRemove={() => void removeDownload(chapter.id)}
+                    onPause={() => task?.id !== undefined && void downloads.pause(task.id)}
+                    onResume={() => task?.id !== undefined && void downloads.resume(task.id)}
+                  />
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      </div>
+
+      <div className="fixed inset-x-0 bottom-16 z-20 border-t border-white/10 bg-tg-bg/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-tg-bg/80">
+        <div className="mx-auto flex max-w-lg gap-3">
           <button
             type="button"
+            disabled={!primaryChapter}
             onClick={() => {
-              impact('light');
-              void toggleFavorite(comic.id);
+              if (!primaryChapter || !resumeTarget) return;
+              openChapter(primaryChapter.id, resumeTarget.page);
             }}
-            aria-pressed={isFavorite}
-            className={`mt-3 rounded-lg px-4 py-1.5 text-sm font-medium ${
-              isFavorite
-                ? 'bg-tg-button text-tg-button-text'
-                : 'bg-tg-secondary-bg text-tg-text'
-            }`}
+            className="flex-1 rounded-xl bg-tg-button px-4 py-3 text-sm font-semibold text-tg-button-text disabled:opacity-40"
           >
-            {isFavorite ? 'In favourites' : 'Add to favourites'}
+            {readLabel}
+          </button>
+          <button
+            type="button"
+            disabled={!primaryChapter || primaryDownloaded || primaryTask?.status === 'running' || primaryTask?.status === 'queued'}
+            onClick={() => {
+              if (!primaryChapter) return;
+              if (primaryTask?.status === 'paused' || primaryTask?.status === 'failed') {
+                void downloads.resume(primaryTask.id!);
+                return;
+              }
+              void download(primaryChapter);
+            }}
+            className="flex-1 rounded-xl bg-tg-secondary-bg px-4 py-3 text-sm font-semibold text-tg-text disabled:opacity-40"
+          >
+            {primaryDownloaded
+              ? 'Downloaded'
+              : primaryTask?.status === 'running' || primaryTask?.status === 'queued'
+                ? 'Downloading…'
+                : primaryTask?.status === 'paused'
+                  ? 'Resume download'
+                  : primaryTask?.status === 'failed'
+                    ? 'Retry download'
+                    : 'Download'}
           </button>
         </div>
-      </header>
-
-      {comic.description && (
-        <p className="mt-4 px-4 text-sm leading-relaxed text-tg-hint">{comic.description}</p>
-      )}
-
-      <section className="mt-6">
-        <h2 className="px-4 pb-2 text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
-          Chapters
-        </h2>
-
-        <ul className="divide-y divide-white/5">
-          {chapters.map((chapter) => {
-            const task = taskByChapter.get(chapter.id);
-            const isDownloaded = downloadedIds.has(chapter.id);
-            const progress = progressByChapter.get(chapter.id);
-
-            return (
-              <li key={chapter.id} className="flex items-center gap-3 px-4 py-3">
-                <button
-                  type="button"
-                  onClick={() => openChapter(chapter.id, progress?.pageIndex ?? 0)}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <p className="truncate text-sm text-tg-text">{chapter.title}</p>
-                  <p className="text-xs text-tg-hint">
-                    {chapter.pageCount > 0 ? `${chapter.pageCount} pages` : 'Tap to load'}
-                    {progress &&
-                      progress.pageCount > 0 &&
-                      ` · ${Math.round(((progress.pageIndex + 1) / progress.pageCount) * 100)}% read`}
-                  </p>
-                </button>
-
-                <ChapterDownloadButton
-                  task={task}
-                  downloaded={isDownloaded}
-                  onDownload={() => void download(chapter)}
-                  onRemove={() => void removeDownload(chapter.id)}
-                  onPause={() => task?.id !== undefined && void downloads.pause(task.id)}
-                  onResume={() => task?.id !== undefined && void downloads.resume(task.id)}
-                />
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+      </div>
     </div>
   );
 }

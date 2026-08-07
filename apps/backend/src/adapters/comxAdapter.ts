@@ -339,7 +339,13 @@ export class ComxAdapter implements ProviderAdapter {
     const $coverImg = $('.full-story-img img, .poster-full img, .story-posters img').first();
     const coverSrc = $coverImg.attr('data-src') || $coverImg.attr('src') || '';
 
-    const description = $('.story-description, .full-text, #full-story-text').text().trim();
+    const description = (
+      $('.story-description, .full-text, #full-story-text, .full-story, .comic-description')
+        .first()
+        .text() || ''
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
     const rating =
       $('.rating-value, .rate-count, .current-rating').text().trim() || undefined;
 
