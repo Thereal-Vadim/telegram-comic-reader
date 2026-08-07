@@ -124,7 +124,24 @@ export class DownloadManager {
         width: p.width,
         height: p.height,
       }));
+      if (pages.length === 0) {
+        await db.queue.update(taskId, {
+          status: 'failed',
+          error: 'No pages available for this issue',
+          updatedAt: Date.now(),
+        });
+        await this.#notify();
+        throw new Error('No pages available for this issue');
+      }
       this.#pageCache.set(taskId, pages);
+      // List responses often have pageCount 0; sync the real total before start.
+      await db.queue.update(taskId, {
+        total: pages.length,
+        status: 'running',
+        updatedAt: Date.now(),
+      });
+      await db.chapters.update(chapterId, { pageCount: pages.length }).catch(() => undefined);
+      await this.#notify();
     }
 
     this.#send({ type: 'start', taskId, pages });

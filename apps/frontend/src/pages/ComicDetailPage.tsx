@@ -80,9 +80,11 @@ export function ComicDetailPage(): React.JSX.Element {
   const openChapter = useCallback(
     (chapterId: string) => {
       impact('medium');
-      void navigate(`/chapter/${encodeURIComponent(chapterId)}`);
+      void navigate(
+        `/chapter/${encodeURIComponent(chapterId)}?comic=${encodeURIComponent(comicId)}`,
+      );
     },
-    [navigate, impact],
+    [navigate, impact, comicId],
   );
 
   if (loading && !comic) return <Spinner label="Loading" />;
