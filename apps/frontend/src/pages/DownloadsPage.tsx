@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EmptyState } from '../components/states';
 import type { DownloadTask } from '../db/schema';
@@ -26,11 +26,24 @@ export function DownloadsPage(): React.JSX.Element {
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
   const [comics, setComics] = useState<{ id: string; title: string; bytes: number }[]>([]);
-  const { impact } = useHaptics();
+  const { impact, notify } = useHaptics();
+  const prevStatuses = useRef(new Map<number, DownloadTask['status']>());
 
   const active = tasks.some((t) => t.status === 'running' || t.status === 'queued');
   // Warn before closing while a transfer is live, since closing suspends it.
   useClosingConfirmation(active);
+
+  // Buzz when a live transfer finishes — only on a status transition, so
+  // remounting the page over already-done tasks does not vibrate.
+  useEffect(() => {
+    for (const task of tasks) {
+      if (task.id === undefined) continue;
+      const prev = prevStatuses.current.get(task.id);
+      prevStatuses.current.set(task.id, task.status);
+      if (prev && prev !== 'done' && task.status === 'done') notify('success');
+      if (prev && prev !== 'failed' && task.status === 'failed') notify('error');
+    }
+  }, [tasks, notify]);
 
   const refresh = useCallback(async () => {
     setStorage(await getStorageStatus());

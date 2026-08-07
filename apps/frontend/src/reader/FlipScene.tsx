@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Color, DoubleSide, PlaneGeometry, ShaderMaterial, type Texture } from 'three';
+import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
 import { pageFragmentShader, pageVertexShader } from './shaders';
 import { stepSpring, type FlipState, type TurnDirection } from './useFlipGesture';
 
@@ -23,6 +24,8 @@ export interface FlipSceneProps {
   /** Live gesture state, mutated by the pointer handlers. */
   gesture: React.RefObject<FlipState>;
   currentTexture: Texture | null;
+  /** Optional hi-res texture for the page under a pinch / double-tap zoom. */
+  currentZoomTexture: Texture | null;
   nextTexture: Texture | null;
   prevTexture: Texture | null;
   /** Page aspect ratio (width / height), used to letterbox correctly. */
@@ -57,6 +60,7 @@ function createPageMaterial(paperColor: string): ShaderMaterial {
 export function FlipScene({
   gesture,
   currentTexture,
+  currentZoomTexture,
   nextTexture,
   prevTexture,
   aspect,
@@ -131,6 +135,13 @@ export function FlipScene({
     // rather than in React so reversing mid-drag is instant.
     const destination = forward ? nextTexture : prevTexture;
 
+    // Prefer the hi-res zoom texture once the camera is past the threshold so
+    // a double-tap / pinch does not just magnify the screen-resolution page.
+    const front =
+      state.scale >= ZOOM_TEXTURE_THRESHOLD && currentZoomTexture
+        ? currentZoomTexture
+        : currentTexture;
+
     if (reducedMotion) {
       // Cross-fade: the sheet stays flat and its opacity falls away.
       sheetMaterial.uniforms['uProgress']!.value = 0;
@@ -140,8 +151,8 @@ export function FlipScene({
       sheetMaterial.uniforms['uOpacity']!.value = 1;
     }
 
-    sheetMaterial.uniforms['uFront']!.value = currentTexture;
-    sheetMaterial.uniforms['uHasFront']!.value = currentTexture ? 1 : 0;
+    sheetMaterial.uniforms['uFront']!.value = front;
+    sheetMaterial.uniforms['uHasFront']!.value = front ? 1 : 0;
     sheetMaterial.uniforms['uBack']!.value = destination;
     sheetMaterial.uniforms['uHasBack']!.value = destination ? 1 : 0;
 

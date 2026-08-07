@@ -69,13 +69,20 @@ function createStub(): TelegramWebApp {
     headerColor: FALLBACK_THEME.header_bg_color!,
     backgroundColor: FALLBACK_THEME.bg_color!,
     isClosingConfirmationEnabled: false,
-    BackButton: {
-      isVisible: false,
-      show: noop,
-      hide: noop,
-      onClick: noop,
-      offClick: noop,
-    },
+    BackButton: (() => {
+      const button = {
+        isVisible: false,
+        show: (): void => {
+          button.isVisible = true;
+        },
+        hide: (): void => {
+          button.isVisible = false;
+        },
+        onClick: noop,
+        offClick: noop,
+      };
+      return button;
+    })(),
     MainButton: makeButton(),
     HapticFeedback: {
       impactOccurred: noop,

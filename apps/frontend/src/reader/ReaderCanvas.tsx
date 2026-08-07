@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import type { Texture, WebGLRenderer } from 'three';
+import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
 import { FlipScene } from './FlipScene';
 import { TextureManager, type TextureSource } from './TextureManager';
 import { useFlipGesture, type TurnDirection } from './useFlipGesture';
@@ -8,11 +9,12 @@ import { useFlipGesture, type TurnDirection } from './useFlipGesture';
 /**
  * The reader surface: canvas, gesture handling, and the texture window.
  *
- * Texture policy lives here. Exactly three pages are ever resident (previous,
- * current, next), acquired whenever the index moves and released by the
- * manager's LRU as new ones arrive. Prefetching the neighbours is what makes a
- * turn instant; capping at three is what stops a 300-page chapter from
- * accumulating 2 GB of GPU memory over a reading session.
+ * Texture policy lives here. Exactly three screen pages are ever resident
+ * (previous, current, next), plus at most one zoom-resolution page for the
+ * page under a pinch / double-tap. Prefetching the neighbours is what makes a
+ * turn instant; the caps are what stop a 300-page chapter from accumulating
+ * gigabytes of GPU memory over a reading session. Every texture is disposed
+ * through {@link TextureManager} — components never call `texture.dispose()`.
  */
 
 export interface ReaderPage {
@@ -20,6 +22,12 @@ export interface ReaderPage {
   index: number;
   /** Where to get the bytes: a proxy URL online, an IndexedDB blob offline. */
   source: TextureSource;
+  /**
+   * Optional higher-resolution source for pinch / double-tap zoom.
+   * Online this is the `zoom` image variant; offline it is typically the same
+   * stored blob (no sharper bytes available without another download).
+   */
+  zoomSource?: TextureSource;
   width: number | null;
   height: number | null;
 }
@@ -30,6 +38,8 @@ export interface ReaderCanvasProps {
   onIndexChange: (index: number) => void;
   onTapCentre: () => void;
   onThresholdCrossed?: () => void;
+  /** Fired when pinch / double-tap crosses into or out of a zoomed state. */
+  onZoomChange?: (zoomed: boolean) => void;
   /** Right-to-left reading order. */
   rtl?: boolean;
   paperColor?: string;
@@ -90,6 +100,7 @@ export function ReaderCanvas({
   onIndexChange,
   onTapCentre,
   onThresholdCrossed,
+  onZoomChange,
   rtl = false,
   paperColor = '#f8f5ef',
   onStats,
@@ -122,9 +133,11 @@ export function ReaderCanvas({
     current: Texture | null;
     next: Texture | null;
   }>({ prev: null, current: null, next: null });
+  const [zoomTexture, setZoomTexture] = useState<Texture | null>(null);
 
   const [generation, setGeneration] = useState(0);
   const reducedMotion = usePrefersReducedMotion();
+  const zoomedRef = useRef(false);
 
   // Guards against a late texture load writing into state after the index has
   // moved on, which would briefly show the wrong page.
@@ -139,10 +152,22 @@ export function ReaderCanvas({
     [pages.length],
   );
 
+  const handleScaleChange = useCallback(
+    (scale: number) => {
+      const zoomed = scale >= ZOOM_TEXTURE_THRESHOLD;
+      if (zoomed !== zoomedRef.current) {
+        zoomedRef.current = zoomed;
+        onZoomChange?.(zoomed);
+      }
+    },
+    [onZoomChange],
+  );
+
   const { state: gesture, bind, startTurn, resetZoom } = useFlipGesture({
     onCommit: () => undefined, // the scene commits once the spring settles
     onTapCentre,
     ...(onThresholdCrossed ? { onThresholdCrossed } : {}),
+    onScaleChange: handleScaleChange,
     canTurn,
     rtl,
     reducedMotion,
@@ -198,6 +223,54 @@ export function ReaderCanvas({
     };
   }, [index, pages, manager, generation]);
 
+  /* Acquire / release the single zoom-resolution slot from the live scale. */
+  useEffect(() => {
+    let cancelled = false;
+    let raf = 0;
+    let lastWanted = false;
+
+    const tick = (): void => {
+      const scale = gesture.current?.scale ?? 1;
+      const wanted = scale >= ZOOM_TEXTURE_THRESHOLD;
+      if (wanted !== lastWanted) {
+        lastWanted = wanted;
+        if (!wanted) {
+          manager.releaseZoom();
+          setZoomTexture(null);
+        } else {
+          const page = pages[indexRef.current];
+          if (page) {
+            const source = page.zoomSource ?? page.source;
+            void manager.acquire(page.id, source, 'zoom').then((texture) => {
+              if (cancelled || pages[indexRef.current]?.id !== page.id) return;
+              if ((gesture.current?.scale ?? 1) < ZOOM_TEXTURE_THRESHOLD) {
+                manager.releaseZoom();
+                return;
+              }
+              setZoomTexture(texture);
+            });
+          }
+        }
+      }
+      raf = window.requestAnimationFrame(tick);
+    };
+
+    raf = window.requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(raf);
+      manager.releaseZoom();
+    };
+  }, [manager, pages, gesture, generation]);
+
+  // Drop the zoom slot whenever the page index changes so a stale hi-res
+  // texture cannot flash onto the next page for a frame.
+  useEffect(() => {
+    manager.releaseZoom();
+    setZoomTexture(null);
+    zoomedRef.current = false;
+  }, [index, manager]);
+
   /*
    * Publish the live budget on `window`.
    *
@@ -247,6 +320,7 @@ export function ReaderCanvas({
 
   const handleContextRestored = useCallback(() => {
     setTextures({ prev: null, current: null, next: null });
+    setZoomTexture(null);
     // Bumping the generation re-runs the acquire effect from a clean slate.
     setGeneration((g) => g + 1);
   }, []);
@@ -291,6 +365,7 @@ export function ReaderCanvas({
         <FlipScene
           gesture={gesture}
           currentTexture={textures.current}
+          currentZoomTexture={zoomTexture}
           nextTexture={textures.next}
           prevTexture={textures.prev}
           aspect={aspect}

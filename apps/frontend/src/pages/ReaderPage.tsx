@@ -18,6 +18,9 @@ import { useBackButton, useHaptics } from '../telegram/hooks';
  * network; otherwise pages stream from the proxy. Deciding up front rather
  * than per page means a partially downloaded chapter cannot produce a
  * confusing mix where some pages work offline and others do not.
+ *
+ * Telegram SDK: native BackButton closes the reader; theme CSS variables drive
+ * the chrome; HapticFeedback fires on page turns, commit threshold, and zoom.
  */
 export function ReaderPage(): React.JSX.Element {
   const { chapterId: rawChapterId } = useParams<{ chapterId: string }>();
@@ -32,6 +35,7 @@ export function ReaderPage(): React.JSX.Element {
   const [error, setError] = useState<unknown>(null);
   const [source, setSource] = useState<'offline' | 'network' | null>(null);
   const [stats, setStats] = useState<TextureStats | null>(null);
+  const [title, setTitle] = useState('');
 
   const chromeVisible = useReaderSettings((s) => s.chromeVisible);
   const toggleChrome = useReaderSettings((s) => s.toggleChrome);
@@ -42,6 +46,7 @@ export function ReaderPage(): React.JSX.Element {
 
   const recordProgress = useLibrary((s) => s.recordProgress);
 
+  // Native Telegram back control — restores prior visibility on unmount.
   useBackButton(useCallback(() => void navigate(-1), [navigate]));
 
   /* Resolve the page list, preferring local storage. */
@@ -54,6 +59,9 @@ export function ReaderPage(): React.JSX.Element {
       setError(null);
 
       try {
+        const chapter = await db.chapters.get(chapterId);
+        if (!cancelled && chapter) setTitle(chapter.title);
+
         if (await isChapterDownloaded(chapterId)) {
           const stored = await getStoredPages(chapterId);
           if (cancelled) return;
@@ -65,8 +73,10 @@ export function ReaderPage(): React.JSX.Element {
                 index: p.index,
                 // Blob sources skip the network entirely; createImageBitmap
                 // reads them directly, so no object URL is ever allocated and
-                // there is nothing to revoke.
-                source: { kind: 'blob', blob: p.blob },
+                // there is nothing to revoke. Offline zoom reuses the same
+                // blob — sharper bytes were never stored.
+                source: { kind: 'blob' as const, blob: p.blob },
+                zoomSource: { kind: 'blob' as const, blob: p.blob },
                 width: p.width,
                 height: p.height,
               })),
@@ -84,7 +94,10 @@ export function ReaderPage(): React.JSX.Element {
           response.pages.map((p) => ({
             id: p.id,
             index: p.index,
-            source: { kind: 'url', url: api.imageUrl(p.url, 'screen') },
+            source: { kind: 'url' as const, url: api.imageUrl(p.url, 'screen') },
+            // Hi-res variant for pinch / double-tap; TextureManager caps this
+            // at one resident slot and disposes it when zoom ends.
+            zoomSource: { kind: 'url' as const, url: api.imageUrl(p.url, 'zoom') },
             width: p.width,
             height: p.height,
           })),
@@ -147,6 +160,13 @@ export function ReaderPage(): React.JSX.Element {
     [impact],
   );
 
+  const handleZoomChange = useCallback(
+    (zoomed: boolean) => {
+      impact(zoomed ? 'medium' : 'soft');
+    },
+    [impact],
+  );
+
   const clampedIndex = useMemo(
     () => Math.max(0, Math.min(index, Math.max(0, pages.length - 1))),
     [index, pages.length],
@@ -159,26 +179,54 @@ export function ReaderPage(): React.JSX.Element {
   }
 
   return (
-    <div className="relative h-viewport w-full overflow-hidden bg-black">
+    <div className="relative h-viewport w-full overflow-hidden bg-tg-bg">
       <ReaderCanvas
         pages={pages}
         index={clampedIndex}
         onIndexChange={handleIndexChange}
         onTapCentre={toggleChrome}
         onThresholdCrossed={() => impact('soft')}
+        onZoomChange={handleZoomChange}
         rtl={direction === 'rtl'}
         paperColor={paperColor}
         {...(showStats ? { onStats: setStats } : {})}
       />
 
-      {/* Chrome sits above the canvas and is pointer-transparent when hidden,
-          so a tap while it is fading out still reaches the reader surface. */}
+      {/* Top chrome: title + close. Uses Telegram theme tokens so a theme
+          change never remounts the WebGL canvas underneath. */}
+      <div
+        className={`pointer-events-none absolute inset-x-0 top-0 pt-safe transition-opacity duration-200 ${
+          chromeVisible ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        <div className="pointer-events-auto flex items-center gap-3 bg-gradient-to-b from-tg-header-bg/95 to-transparent px-4 pb-6 pt-3">
+          <button
+            type="button"
+            onClick={() => {
+              impact('light');
+              void navigate(-1);
+            }}
+            className="rounded-lg bg-tg-secondary-bg px-3 py-1.5 text-sm font-medium text-tg-link"
+          >
+            Close
+          </button>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-tg-text">{title || 'Reading'}</p>
+            <p className="truncate text-[11px] text-tg-hint">
+              {source === 'offline' ? 'Offline · double-tap to zoom' : 'Streaming · double-tap to zoom'}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom chrome: scrubber. Pointer-transparent when hidden so a tap
+          while fading still reaches the reader surface. */}
       <div
         className={`pointer-events-none absolute inset-x-0 bottom-0 pb-safe transition-opacity duration-200 ${
           chromeVisible ? 'opacity-100' : 'opacity-0'
         }`}
       >
-        <div className="pointer-events-auto bg-gradient-to-t from-black/90 to-transparent px-4 pb-4 pt-8">
+        <div className="pointer-events-auto bg-gradient-to-t from-tg-header-bg/95 to-transparent px-4 pb-4 pt-8">
           <input
             type="range"
             min={0}
@@ -191,8 +239,8 @@ export function ReaderPage(): React.JSX.Element {
             // direction pages actually advance.
             style={direction === 'rtl' ? { transform: 'scaleX(-1)' } : undefined}
           />
-          <div className="mt-1 flex items-center justify-between text-xs text-white/70">
-            <span className="tabular-nums">
+          <div className="mt-1 flex items-center justify-between text-xs text-tg-hint">
+            <span className="tabular-nums text-tg-text">
               {clampedIndex + 1} / {pages.length}
             </span>
             <span>{source === 'offline' ? 'Offline copy' : 'Streaming'}</span>
@@ -214,12 +262,12 @@ export function ReaderPage(): React.JSX.Element {
  */
 function StatsOverlay({ stats }: { stats: TextureStats }): React.JSX.Element {
   const mb = (stats.totalBytes / 1024 / 1024).toFixed(1);
-  const overBudget = stats.screenCount > 3;
+  const overBudget = stats.screenCount > 3 || stats.zoomCount > 1;
 
   return (
     <div
-      className={`pointer-events-none absolute left-2 top-2 rounded bg-black/70 px-2 py-1 font-mono text-[10px] leading-tight ${
-        overBudget ? 'text-red-400' : 'text-green-400'
+      className={`pointer-events-none absolute left-2 top-2 rounded bg-tg-secondary-bg/90 px-2 py-1 font-mono text-[10px] leading-tight ${
+        overBudget ? 'text-tg-destructive' : 'text-tg-accent'
       }`}
     >
       <div>
