@@ -3,6 +3,7 @@ import { Canvas, invalidate, useThree } from '@react-three/fiber';
 import type { Texture, WebGLRenderer } from 'three';
 import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
 import { FlipScene } from './FlipScene';
+import type { PageLayout } from './pageCurlMath';
 import { TextureManager, type TextureSource } from './TextureManager';
 import { useFlipGesture, type TurnDirection } from './useFlipGesture';
 
@@ -141,6 +142,13 @@ export function ReaderCanvas({
   const [generation, setGeneration] = useState(0);
   const reducedMotion = usePrefersReducedMotion();
   const zoomedRef = useRef(false);
+  /** Shared page letterbox — FlipScene writes, gestures raycast through it. */
+  const layoutRef = useRef<PageLayout>({
+    pageWidth: 1,
+    pageHeight: 1,
+    viewWidth: 1,
+    viewHeight: 1,
+  });
 
   // Guards against a late texture load writing into state after the index has
   // moved on, which would briefly show the wrong page.
@@ -167,11 +175,12 @@ export function ReaderCanvas({
   );
 
   const { state: gesture, bind, startTurn, resetZoom } = useFlipGesture({
-    onCommit: () => undefined, // the scene commits once the spring settles
+    onCommit: () => undefined, // the scene commits once the paper lerp settles
     onTapCentre,
     ...(onThresholdCrossed ? { onThresholdCrossed } : {}),
     onScaleChange: handleScaleChange,
     canTurn,
+    layoutRef,
     rtl,
     reducedMotion,
   });
@@ -399,6 +408,7 @@ export function ReaderCanvas({
         <RendererBridge manager={manager} onContextRestored={handleContextRestored} />
         <FlipScene
           gesture={gesture}
+          layoutRef={layoutRef}
           currentTexture={textures.current}
           currentZoomTexture={zoomTexture}
           nextTexture={textures.next}

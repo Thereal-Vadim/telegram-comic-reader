@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import {
   Color,
@@ -9,19 +9,27 @@ import {
   type Texture,
 } from 'three';
 import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
+import {
+  paperLerpAlpha,
+  progressFromTip,
+  restCorner,
+  tipTravel,
+  type PageLayout,
+} from './pageCurlMath';
 import { flatVertexShader, pageFragmentShader, pageVertexShader } from './shaders';
-import { progressFromTip, restCorner, tipTravel } from './pageCurlMath';
-import { stepSpring, type FlipState, type TurnDirection } from './useFlipGesture';
+import type { FlipState, TurnDirection } from './useFlipGesture';
 
 /**
- * Apple Books–style corner curl.
+ * Apple Books true physics curl.
  *
- * Base sheet stays flat (destination page + contact shadow).
- * Top sheet alone deforms so its corner follows the finger.
+ * Base sheet stays flat (destination + contact shadow).
+ * Top sheet alone deforms; tip eases toward the finger with paper lerp.
  */
 
 export interface FlipSceneProps {
   gesture: React.RefObject<FlipState>;
+  /** Written each frame so gestures can raycast onto the letterboxed page. */
+  layoutRef: React.MutableRefObject<PageLayout>;
   currentTexture: Texture | null;
   currentZoomTexture: Texture | null;
   nextTexture: Texture | null;
@@ -33,6 +41,9 @@ export interface FlipSceneProps {
   reducedMotion: boolean;
   rtl?: boolean;
 }
+
+/** Dense mesh — diagonal folds stay smooth (demo uses 128×128). */
+const PAGE_SEGMENTS = 128;
 
 function createMaterial(
   paperColor: string,
@@ -53,6 +64,7 @@ function createMaterial(
       uHeight: { value: 1 },
       uTip: { value: new Vector2(1, 0) },
       uOrigin: { value: new Vector2(1, 0) },
+      uRadius: { value: 0.18 },
       uActive: { value: 0 },
       uFront: { value: null },
       uBack: { value: null },
@@ -68,6 +80,7 @@ function createMaterial(
 
 export function FlipScene({
   gesture,
+  layoutRef,
   currentTexture,
   currentZoomTexture,
   nextTexture,
@@ -91,19 +104,27 @@ export function FlipScene({
   }, [viewport.width, viewport.height, aspect]);
 
   const geometry = useMemo(
-    () => new PlaneGeometry(pageWidth, pageHeight, 48, 48),
+    () => new PlaneGeometry(pageWidth, pageHeight, PAGE_SEGMENTS, PAGE_SEGMENTS),
     [pageWidth, pageHeight],
   );
   const sheetMaterial = useMemo(() => createMaterial(paperColor, pageDim, true), []);
   const baseMaterial = useMemo(() => createMaterial(paperColor, pageDim, false), []);
 
-  const tipVx = useRef(0);
-  const tipVy = useRef(0);
+  useEffect(() => {
+    layoutRef.current = {
+      pageWidth,
+      pageHeight,
+      viewWidth: viewport.width,
+      viewHeight: viewport.height,
+    };
+  }, [layoutRef, pageWidth, pageHeight, viewport.width, viewport.height]);
 
   useEffect(() => {
+    const radius = pageWidth * 0.11;
     for (const mat of [sheetMaterial, baseMaterial]) {
       mat.uniforms['uWidth']!.value = pageWidth;
       mat.uniforms['uHeight']!.value = pageHeight;
+      mat.uniforms['uRadius']!.value = radius;
     }
     invalidate();
   }, [pageWidth, pageHeight, sheetMaterial, baseMaterial, invalidate]);
@@ -133,28 +154,34 @@ export function FlipScene({
     const state = gesture.current;
     if (!state) return;
 
-    if (!state.dragging) {
-      if (state.springImpulse !== 0) {
-        tipVx.current = state.springImpulse * 0.85;
-        tipVy.current = Math.abs(state.springImpulse) * 0.1;
-        state.springImpulse = 0;
-      }
+    layoutRef.current = {
+      pageWidth,
+      pageHeight,
+      viewWidth: viewport.width,
+      viewHeight: viewport.height,
+    };
 
-      const sx = stepSpring(state.tipX, state.targetTipX, tipVx.current, delta);
-      const sy = stepSpring(state.tipY, state.targetTipY, tipVy.current, delta);
-      state.tipX = sx.value;
-      state.tipY = sy.value;
-      tipVx.current = sx.velocity;
-      tipVy.current = sy.velocity;
-
-      if (state.direction) {
-        state.progress = progressFromTip(state.tipX, state.tipY, state.direction, rtl);
-      } else {
-        state.progress = 0;
-      }
+    // Paper weight: tip always eases toward the finger / settle target.
+    if (reducedMotion) {
+      state.tipX = state.targetTipX;
+      state.tipY = state.targetTipY;
     } else {
-      tipVx.current = 0;
-      tipVy.current = 0;
+      const alpha = paperLerpAlpha(delta);
+      state.tipX += (state.targetTipX - state.tipX) * alpha;
+      state.tipY += (state.targetTipY - state.tipY) * alpha;
+    }
+
+    const cornerY = state.cornerY;
+    if (state.direction) {
+      state.progress = progressFromTip(
+        state.tipX,
+        state.tipY,
+        state.direction,
+        rtl,
+        cornerY,
+      );
+    } else {
+      state.progress = 0;
     }
 
     const direction = state.direction;
@@ -165,9 +192,10 @@ export function FlipScene({
         ? currentZoomTexture
         : currentTexture;
 
-    const travel = direction ? tipTravel(state.tipX, state.tipY, direction, rtl) : 0;
-    // Engage curl only after a real peel — avoids a one-frame spike.
-    const active = direction ? Math.min(1, Math.max(0, (travel - 0.03) / 0.55)) : 0;
+    const travel = direction
+      ? tipTravel(state.tipX, state.tipY, direction, rtl, cornerY)
+      : 0;
+    const active = direction ? Math.min(1, Math.max(0, (travel - 0.02) / 0.5)) : 0;
 
     const tip = sheetMaterial.uniforms['uTip']!.value as Vector2;
     const origin = sheetMaterial.uniforms['uOrigin']!.value as Vector2;
@@ -187,11 +215,9 @@ export function FlipScene({
     } else {
       sheetMaterial.uniforms['uActive']!.value = active;
       sheetMaterial.uniforms['uOpacity']!.value = 1;
-      // Base stays flat; uActive only drives the contact-shadow in the fragment.
       baseMaterial.uniforms['uActive']!.value = active;
     }
 
-    // Current page on top; destination underneath + on the back of the curl.
     sheetMaterial.uniforms['uFront']!.value = front;
     sheetMaterial.uniforms['uHasFront']!.value = front ? 1 : 0;
     sheetMaterial.uniforms['uBack']!.value = destination;
@@ -208,9 +234,8 @@ export function FlipScene({
     camera.updateProjectionMatrix();
 
     const tipSettled =
-      Math.abs(state.tipX - state.targetTipX) < 0.02 &&
-      Math.abs(state.tipY - state.targetTipY) < 0.02 &&
-      Math.abs(tipVx.current) < 0.05;
+      Math.abs(state.tipX - state.targetTipX) < 0.025 &&
+      Math.abs(state.tipY - state.targetTipY) < 0.025;
 
     const completing =
       state.settling &&
@@ -224,15 +249,14 @@ export function FlipScene({
       state.progress = 0;
       state.target = 0;
       state.direction = null;
-      const rest = restCorner('next', rtl);
+      state.cornerY = 0;
+      const rest = restCorner('next', rtl, 0);
       state.tipX = rest.x;
       state.tipY = rest.y;
       state.targetTipX = rest.x;
       state.targetTipY = rest.y;
       state.originX = rest.x;
       state.originY = rest.y;
-      tipVx.current = 0;
-      tipVy.current = 0;
 
       sheetMaterial.uniforms['uActive']!.value = 0;
       sheetMaterial.uniforms['uOpacity']!.value = 1;
@@ -257,6 +281,7 @@ export function FlipScene({
     ) {
       state.direction = null;
       state.progress = 0;
+      state.cornerY = 0;
       sheetMaterial.uniforms['uActive']!.value = 0;
       baseMaterial.uniforms['uActive']!.value = 0;
     }
@@ -265,8 +290,8 @@ export function FlipScene({
       state.dragging ||
       state.settling ||
       travel > 0.008 ||
-      Math.abs(tipVx.current) > 0.01 ||
-      Math.abs(tipVy.current) > 0.01 ||
+      Math.abs(state.tipX - state.targetTipX) > 0.002 ||
+      Math.abs(state.tipY - state.targetTipY) > 0.002 ||
       Math.abs(state.scale - 1) > 0.001 ||
       Math.abs(state.panX) > 0.5 ||
       Math.abs(state.panY) > 0.5;

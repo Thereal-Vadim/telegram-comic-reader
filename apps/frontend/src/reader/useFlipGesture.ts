@@ -14,18 +14,21 @@ import {
 } from './gestureMath';
 import {
   completeTip,
-  pointerToTip,
+  cornerYFromPointer,
   progressFromTip,
+  projectPointerToPage,
   restCorner,
   tipTravel,
+  type PageLayout,
 } from './pageCurlMath';
 
 /**
  * Pointer handling for the reader surface.
  *
- * The animation state lives entirely in refs and is read by the render loop.
- * Tip (the curling page corner) follows the finger in page UV while dragging —
- * the same interaction model as Apple Books.
+ * Finger position is projected onto the letterboxed page plane (ortho
+ * raycaster). The fold corner is locked at grab time (top/bottom × edge);
+ * the tip target follows the finger so the bisector fold stays under it.
+ * Visual tip easing lives in FlipScene (paper lerp).
  */
 
 export type TurnDirection = 'next' | 'prev';
@@ -34,27 +37,29 @@ export type TurnDirection = 'next' | 'prev';
 export interface FlipState {
   /** -1..1 derived from tip. Negative = prev, positive = next. */
   progress: number;
-  /** Spring target for progress (used for reduced-motion / commit checks). */
+  /** Spring / settle target for progress (±1 committed, 0 cancel). */
   target: number;
-  /** Curling corner tip in page UV (0..1, y: 0=bottom). */
+  /** Rendered tip (eased) in page UV. */
   tipX: number;
   tipY: number;
+  /** Finger / settle target tip in page UV. */
   targetTipX: number;
   targetTipY: number;
-  /** Rest corner for the active turn direction. */
+  /** Grabbed rest corner for the active turn. */
   originX: number;
   originY: number;
-  /** True while a finger is down and driving the tip directly. */
+  /** Locked top (1) or bottom (0) corner for this peel. */
+  cornerY: 0 | 1;
+  /** True while a finger is down and driving the tip target. */
   dragging: boolean;
   /** Set once a release has been committed, to suppress duplicate commits. */
   settling: boolean;
   direction: TurnDirection | null;
   /**
-   * One-shot spring velocity (progress units / second) applied on the first
-   * post-release frame so flicks keep their momentum.
+   * Legacy one-shot impulse retained for API compatibility; paper lerp
+   * in FlipScene owns settle feel now.
    */
   springImpulse: number;
-  /** Pinch-zoom scale and pan offset, also read directly by the renderer. */
   scale: number;
   panX: number;
   panY: number;
@@ -66,6 +71,8 @@ export interface FlipGestureOptions {
   onThresholdCrossed?: () => void;
   onScaleChange?: (scale: number) => void;
   canTurn: (direction: TurnDirection) => boolean;
+  /** Shared with FlipScene — page letterbox in world units. */
+  layoutRef: React.RefObject<PageLayout>;
   rtl?: boolean;
   reducedMotion?: boolean;
 }
@@ -106,7 +113,13 @@ interface PinchStart {
 
 function idleTip(): Pick<
   FlipState,
-  'tipX' | 'tipY' | 'targetTipX' | 'targetTipY' | 'originX' | 'originY'
+  | 'tipX'
+  | 'tipY'
+  | 'targetTipX'
+  | 'targetTipY'
+  | 'originX'
+  | 'originY'
+  | 'cornerY'
 > {
   return {
     tipX: 1,
@@ -115,6 +128,7 @@ function idleTip(): Pick<
     targetTipY: 0,
     originX: 1,
     originY: 0,
+    cornerY: 0,
   };
 }
 
@@ -125,6 +139,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     onThresholdCrossed,
     onScaleChange,
     canTurn,
+    layoutRef,
     rtl = false,
     reducedMotion = false,
   } = options;
@@ -151,6 +166,11 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
   const axisLock = useRef<'horizontal' | 'vertical' | null>(null);
   const crossedThreshold = useRef(false);
   const lastTap = useRef<TapSample | null>(null);
+  /** Direction + corner locked for the active peel. */
+  const peelLock = useRef<{
+    direction: TurnDirection;
+    cornerY: 0 | 1;
+  } | null>(null);
 
   const callbacks = useRef({
     onCommit,
@@ -169,6 +189,41 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     };
   });
 
+  const projectFinger = useCallback(
+    (clientX: number, clientY: number) => {
+      const layout = layoutRef.current;
+      const s = state.current;
+      if (
+        layout &&
+        layout.pageWidth > 0 &&
+        layout.pageHeight > 0 &&
+        layout.viewWidth > 0 &&
+        layout.viewHeight > 0
+      ) {
+        return projectPointerToPage(
+          clientX,
+          clientY,
+          surfaceLeft.current,
+          surfaceTop.current,
+          surfaceWidth.current,
+          surfaceHeight.current,
+          layout,
+          s.scale,
+          -s.panX / 200,
+          s.panY / 200,
+        );
+      }
+      // Layout not ready yet — full-canvas UV fallback.
+      const x = (clientX - surfaceLeft.current) / Math.max(1, surfaceWidth.current);
+      const y = 1 - (clientY - surfaceTop.current) / Math.max(1, surfaceHeight.current);
+      return {
+        x: Math.max(-0.5, Math.min(1.5, x)),
+        y: Math.max(-0.2, Math.min(1.2, y)),
+      };
+    },
+    [layoutRef],
+  );
+
   const setScale = useCallback((next: number) => {
     const s = state.current;
     const clamped = clampScale(next);
@@ -184,43 +239,45 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     callbacks.current.onScaleChange?.(clamped);
   }, []);
 
-  const applyTip = useCallback(
-    (direction: TurnDirection, tipX: number, tipY: number) => {
+  const applyTipTarget = useCallback(
+    (direction: TurnDirection, cornerY: 0 | 1, tipX: number, tipY: number) => {
       const s = state.current;
-      const origin = restCorner(direction, rtl);
+      const origin = restCorner(direction, rtl, cornerY);
       s.direction = direction;
+      s.cornerY = cornerY;
       s.originX = origin.x;
       s.originY = origin.y;
-      s.tipX = tipX;
-      s.tipY = tipY;
       s.targetTipX = tipX;
       s.targetTipY = tipY;
-      s.progress = progressFromTip(tipX, tipY, direction, rtl);
+      s.progress = progressFromTip(tipX, tipY, direction, rtl, cornerY);
       s.target = s.progress;
+      if (reducedMotion) {
+        s.tipX = tipX;
+        s.tipY = tipY;
+      }
     },
-    [rtl],
+    [reducedMotion, rtl],
   );
 
   const commit = useCallback(
     (direction: TurnDirection) => {
       const s = state.current;
-      const origin = restCorner(direction, rtl);
-      const done = completeTip(direction, rtl, s.tipY || 0.35);
+      const cornerY = s.cornerY;
+      const origin = restCorner(direction, rtl, cornerY);
+      const done = completeTip(direction, rtl, s.targetTipY || s.tipY || 0.35);
       s.settling = true;
       s.direction = direction;
+      s.cornerY = cornerY;
       s.originX = origin.x;
       s.originY = origin.y;
       s.targetTipX = done.x;
       s.targetTipY = done.y;
       s.target = direction === 'next' ? 1 : -1;
-      if (s.springImpulse === 0) {
-        s.springImpulse = direction === 'next' ? 5 : -5;
-      }
+      s.springImpulse = 0;
       if (reducedMotion) {
         s.tipX = done.x;
         s.tipY = done.y;
         s.progress = s.target;
-        s.springImpulse = 0;
       }
     },
     [reducedMotion, rtl],
@@ -228,12 +285,14 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
 
   const cancelTurn = useCallback(() => {
     const s = state.current;
-    const direction = s.direction ?? 'next';
-    const origin = restCorner(direction, rtl);
+    const direction = s.direction ?? peelLock.current?.direction ?? 'next';
+    const cornerY = s.cornerY;
+    const origin = restCorner(direction, rtl, cornerY);
     s.targetTipX = origin.x;
     s.targetTipY = origin.y;
     s.target = 0;
     s.settling = false;
+    peelLock.current = null;
   }, [rtl]);
 
   const startTurn = useCallback(
@@ -241,14 +300,17 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
       const s = state.current;
       if (s.dragging || s.settling) return;
       if (!callbacks.current.canTurn(direction)) return;
-      const origin = restCorner(direction, rtl);
-      s.tipX = origin.x;
-      s.tipY = origin.y;
+      const cornerY: 0 | 1 = 0;
+      const origin = restCorner(direction, rtl, cornerY);
+      s.cornerY = cornerY;
       s.originX = origin.x;
       s.originY = origin.y;
+      s.tipX = origin.x;
+      s.tipY = origin.y;
+      s.targetTipX = origin.x;
+      s.targetTipY = 0.12;
       s.progress = 0;
-      // Seed a natural peel height so tap-turns curl from the corner, not flat.
-      s.tipY = 0.08;
+      peelLock.current = { direction, cornerY };
       commit(direction);
     },
     [commit, rtl],
@@ -263,53 +325,58 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     callbacks.current.onScaleChange?.(1);
   }, []);
 
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
-    const s = state.current;
-    if (s.settling) return;
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      const s = state.current;
+      if (s.settling) return;
 
-    const target = e.currentTarget as HTMLElement;
-    const rect = target.getBoundingClientRect?.();
-    surfaceWidth.current = target.clientWidth || 1;
-    surfaceHeight.current = target.clientHeight || 1;
-    surfaceLeft.current = rect?.left ?? 0;
-    surfaceTop.current = rect?.top ?? 0;
-    target.setPointerCapture?.(e.pointerId);
+      const target = e.currentTarget as HTMLElement;
+      const rect = target.getBoundingClientRect?.();
+      surfaceWidth.current = target.clientWidth || 1;
+      surfaceHeight.current = target.clientHeight || 1;
+      surfaceLeft.current = rect?.left ?? 0;
+      surfaceTop.current = rect?.top ?? 0;
+      target.setPointerCapture?.(e.pointerId);
 
-    const now = performance.now();
-    pointers.current.set(e.pointerId, {
-      x: e.clientX,
-      y: e.clientY,
-      startX: e.clientX,
-      startY: e.clientY,
-      startTime: now,
-      lastX: e.clientX,
-      lastY: e.clientY,
-      lastTime: now,
-      velocityX: 0,
-      velocityY: 0,
-    });
+      const now = performance.now();
+      pointers.current.set(e.pointerId, {
+        x: e.clientX,
+        y: e.clientY,
+        startX: e.clientX,
+        startY: e.clientY,
+        startTime: now,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        lastTime: now,
+        velocityX: 0,
+        velocityY: 0,
+      });
 
-    if (pointers.current.size === 2) {
-      const [a, b] = [...pointers.current.values()];
-      if (a && b) {
-        pinchStart.current = {
-          distance: Math.hypot(a.x - b.x, a.y - b.y) || 1,
-          scale: s.scale,
-          midX: (a.x + b.x) / 2,
-          midY: (a.y + b.y) / 2,
-          panX: s.panX,
-          panY: s.panY,
-        };
+      if (pointers.current.size === 2) {
+        const [a, b] = [...pointers.current.values()];
+        if (a && b) {
+          pinchStart.current = {
+            distance: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+            scale: s.scale,
+            midX: (a.x + b.x) / 2,
+            midY: (a.y + b.y) / 2,
+            panX: s.panX,
+            panY: s.panY,
+          };
+        }
+        s.dragging = false;
+        cancelTurn();
+        axisLock.current = null;
+        peelLock.current = null;
+      } else {
+        s.dragging = true;
+        axisLock.current = null;
+        crossedThreshold.current = false;
+        peelLock.current = null;
       }
-      s.dragging = false;
-      cancelTurn();
-      axisLock.current = null;
-    } else {
-      s.dragging = true;
-      axisLock.current = null;
-      crossedThreshold.current = false;
-    }
-  }, [cancelTurn]);
+    },
+    [cancelTurn],
+  );
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
@@ -365,8 +432,6 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
 
       if (axisLock.current === null) {
         if (Math.abs(dx) > TAP_SLOP_PX || Math.abs(dy) > PAN_LOCKOUT_PX) {
-          // Prefer horizontal, but allow a mostly-vertical peel from the corner
-          // (Apple Books lets you drag up-left from the bottom-right).
           const cornerish =
             Math.abs(dx) > TAP_SLOP_PX * 0.6 ||
             (Math.abs(dy) > TAP_SLOP_PX && Math.abs(dx) > Math.abs(dy) * 0.35);
@@ -377,45 +442,46 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
       }
       if (axisLock.current === 'vertical') return;
 
-      // Direction from initial horizontal intent (reading-order aware).
-      const rawForward = rtl ? dx > 0 : dx < 0;
-      const direction: TurnDirection = rawForward ? 'next' : 'prev';
+      const finger = projectFinger(e.clientX, e.clientY);
 
-      const finger = pointerToTip(
-        e.clientX,
-        e.clientY,
-        surfaceLeft.current,
-        surfaceTop.current,
-        surfaceWidth.current,
-        surfaceHeight.current,
-      );
-      const origin = restCorner(direction, rtl);
-      // Grow the peel from the corner toward the finger so the first frames
-      // are a small corner lift (Apple Books), not a sudden mid-page fold.
-      const dragNorm =
-        Math.hypot(dx, dy) /
-        Math.max(1, Math.hypot(surfaceWidth.current, surfaceHeight.current));
-      const grow = Math.min(1, dragNorm * 2.1 + 0.04);
-      const tipX = origin.x + (finger.x - origin.x) * grow;
-      const tipY = origin.y + (finger.y - origin.y) * grow;
+      // Lock peel corner + direction on first meaningful drag (Apple Books).
+      if (!peelLock.current) {
+        const rawForward = rtl ? dx > 0 : dx < 0;
+        const direction: TurnDirection = rawForward ? 'next' : 'prev';
+        const cornerY = cornerYFromPointer(finger.y);
+        const origin = restCorner(direction, rtl, cornerY);
+        peelLock.current = { direction, cornerY };
+        // Snap rendered tip to the corner so the peel grows from zero.
+        s.tipX = origin.x;
+        s.tipY = origin.y;
+        s.originX = origin.x;
+        s.originY = origin.y;
+        s.cornerY = cornerY;
+        s.direction = direction;
+      }
+
+      const { direction, cornerY } = peelLock.current;
+      const origin = restCorner(direction, rtl, cornerY);
 
       if (!callbacks.current.canTurn(direction)) {
-        applyTip(
+        applyTipTarget(
           direction,
-          origin.x + (tipX - origin.x) * 0.12,
-          origin.y + (tipY - origin.y) * 0.12,
+          cornerY,
+          origin.x + (finger.x - origin.x) * 0.12,
+          origin.y + (finger.y - origin.y) * 0.12,
         );
         return;
       }
 
-      applyTip(direction, tipX, tipY);
+      // Tip target = finger on the page plane — fold axis follows dynamically.
+      applyTipTarget(direction, cornerY, finger.x, finger.y);
 
       if (!crossedThreshold.current && Math.abs(s.progress) >= COMMIT_THRESHOLD) {
         crossedThreshold.current = true;
         callbacks.current.onThresholdCrossed?.();
       }
     },
-    [applyTip, rtl],
+    [applyTipTarget, projectFinger, rtl],
   );
 
   const endPointer = useCallback(
@@ -458,6 +524,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
             s.panY = clampPan((midY - record.y) * (scale - 1), scale, surfaceHeight.current);
             setScale(scale);
           }
+          peelLock.current = null;
           return;
         }
 
@@ -465,6 +532,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
 
         if (s.scale > 1.01) {
           if (zone === 'centre') callbacks.current.onTapCentre();
+          peelLock.current = null;
           return;
         }
 
@@ -477,23 +545,18 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
         } else {
           callbacks.current.onTapCentre();
         }
+        peelLock.current = null;
         return;
       }
 
-      if (axisLock.current !== 'horizontal' || !s.direction) {
+      if (axisLock.current !== 'horizontal' || !s.direction || !peelLock.current) {
         cancelTurn();
         return;
       }
 
-      const direction = s.direction;
-      const travel = tipTravel(s.tipX, s.tipY, direction, rtl);
-      const width = Math.max(1, surfaceWidth.current);
-      const pxPerSec = record.velocityX * 1000;
-      const impulse = Math.max(
-        -14,
-        Math.min(14, rtl ? pxPerSec / width : -pxPerSec / width),
-      );
-      s.springImpulse = impulse;
+      const direction = peelLock.current.direction;
+      const cornerY = peelLock.current.cornerY;
+      const travel = tipTravel(s.targetTipX, s.targetTipY, direction, rtl, cornerY);
 
       const flicked =
         Math.abs(record.velocityX) > FLICK_VELOCITY ||
@@ -502,14 +565,25 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
       const directionIsNext = direction === 'next';
       const flickOk = flicked && flickForward === directionIsNext;
 
+      // Commit when finger crossed mid-page (demo), threshold, or flick.
+      const crossedMid =
+        direction === 'next' ? s.targetTipX < 0.45 : s.targetTipX > 0.55;
+
       if (
-        (Math.abs(s.progress) >= COMMIT_THRESHOLD || flickOk || travel > 0.42) &&
+        (Math.abs(s.progress) >= COMMIT_THRESHOLD ||
+          flickOk ||
+          travel > 0.42 ||
+          crossedMid) &&
         callbacks.current.canTurn(direction)
       ) {
+        // Keep vertical continuity into the settle.
+        s.targetTipY = Math.min(0.92, Math.max(0.08, s.targetTipY));
         commit(direction);
       } else {
         cancelTurn();
       }
+
+      peelLock.current = null;
     },
     [cancelTurn, commit, rtl, setScale, startTurn],
   );
@@ -528,6 +602,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     const clear = (): void => {
       pointers.current.clear();
       pinchStart.current = null;
+      peelLock.current = null;
       state.current.dragging = false;
       cancelTurn();
     };
@@ -539,7 +614,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
 }
 
 /**
- * Advance a spring one frame (used for tip X/Y and legacy progress settle).
+ * Advance a spring one frame (tests / callers that still want a damped spring).
  */
 export function stepSpring(
   current: number,
