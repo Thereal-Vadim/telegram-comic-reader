@@ -173,6 +173,7 @@ export function ReaderPage(): React.JSX.Element {
 
   const displayTitle = comicTitle || title || 'Reading';
   const isScroll = pageAnimation === 'scroll';
+  const lightChrome = isLightColor(ambientColor);
 
   if (loading) return <Spinner label="Opening chapter" />;
   if (error) return <ErrorState error={error} onRetry={() => window.location.reload()} />;
@@ -212,13 +213,19 @@ export function ReaderPage(): React.JSX.Element {
         />
       )}
 
-      {/* HUD — same tokens as the Mini App chrome (tg-text / soft black scrims). */}
+      {/* HUD follows the paper ambient — white themes stay light, Quiet stays dark. */}
       <div
         className={`pointer-events-none absolute inset-x-0 top-0 z-30 pt-safe transition-opacity duration-200 ${
-          chromeVisible ? 'opacity-100' : 'opacity-90'
+          chromeVisible ? 'opacity-100' : 'opacity-95'
         }`}
       >
-        <div className="bg-gradient-to-b from-black/65 via-black/25 to-transparent px-4 pb-8 pt-3">
+        <div
+          className={`px-4 pb-8 pt-3 ${
+            lightChrome
+              ? 'bg-gradient-to-b from-white via-white/80 to-transparent'
+              : 'bg-gradient-to-b from-black/65 via-black/25 to-transparent'
+          }`}
+        >
           <div className="flex items-center gap-3">
             {chromeVisible ? (
               <button
@@ -227,7 +234,11 @@ export function ReaderPage(): React.JSX.Element {
                   impact('light');
                   void navigate(-1);
                 }}
-                className="pointer-events-auto shrink-0 rounded-lg bg-black/40 px-3 py-1.5 text-sm font-medium text-white"
+                className={`pointer-events-auto shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium ${
+                  lightChrome
+                    ? 'bg-black/8 text-neutral-900'
+                    : 'bg-black/40 text-white'
+                }`}
               >
                 Back
               </button>
@@ -235,9 +246,19 @@ export function ReaderPage(): React.JSX.Element {
               <span className="w-14 shrink-0" />
             )}
             <div className="min-w-0 flex-1 text-center">
-              <p className="truncate text-sm font-semibold text-white/95">{displayTitle}</p>
+              <p
+                className={`truncate text-sm font-semibold ${
+                  lightChrome ? 'text-neutral-900' : 'text-white/95'
+                }`}
+              >
+                {displayTitle}
+              </p>
               {(title && comicTitle) || source ? (
-                <p className="truncate text-[11px] text-white/65">
+                <p
+                  className={`truncate text-[11px] ${
+                    lightChrome ? 'text-neutral-500' : 'text-white/65'
+                  }`}
+                >
                   {title && comicTitle ? title : ''}
                   {title && comicTitle && source ? ' · ' : ''}
                   {source === 'offline' ? 'Offline' : source === 'network' ? 'Streaming' : ''}
@@ -254,8 +275,18 @@ export function ReaderPage(): React.JSX.Element {
           chromeVisible ? 'opacity-0' : 'opacity-100'
         }`}
       >
-        <div className="bg-gradient-to-t from-black/55 to-transparent px-4 pb-3 pt-8">
-          <p className="text-center text-xs font-medium tabular-nums text-white/80">
+        <div
+          className={`px-4 pb-3 pt-8 ${
+            lightChrome
+              ? 'bg-gradient-to-t from-white via-white/70 to-transparent'
+              : 'bg-gradient-to-t from-black/55 to-transparent'
+          }`}
+        >
+          <p
+            className={`text-center text-xs font-medium tabular-nums ${
+              lightChrome ? 'text-neutral-600' : 'text-white/80'
+            }`}
+          >
             {clampedIndex + 1}/{pages.length}
           </p>
         </div>
@@ -280,6 +311,15 @@ export function ReaderPage(): React.JSX.Element {
       {showStats && stats && <StatsOverlay stats={stats} />}
     </div>
   );
+}
+
+function isLightColor(hex: string): boolean {
+  const raw = hex.replace('#', '');
+  if (raw.length < 6) return false;
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 >= 160;
 }
 
 function StatsOverlay({ stats }: { stats: TextureStats }): React.JSX.Element {

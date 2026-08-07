@@ -41,7 +41,7 @@ export const PAPER_PRESETS: readonly PaperPreset[] = [
     id: 'original',
     label: 'Original',
     paperColor: '#ffffff',
-    ambientColor: '#e8e8ed',
+    ambientColor: '#ffffff',
     pageDim: 1,
     inkColor: '#1c1c1e',
   },
