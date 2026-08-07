@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+
+/*
+ * Tailwind 4 is configured in CSS rather than a JS file. Mapping the Telegram
+ * variables into the `@theme` block makes them available as ordinary utilities
+ * (`bg-tg-bg`, `text-tg-hint`), so components never hardcode a colour and the
+ * whole app re-themes from the single write in theme.ts.
+ */
+@theme {
+  --color-tg-bg: var(--tg-bg, #17212b);
+  --color-tg-text: var(--tg-text, #f5f5f5);
+  --color-tg-hint: var(--tg-hint, #708499);
+  --color-tg-link: var(--tg-link, #6ab3f3);
+  --color-tg-button: var(--tg-button, #5288c1);
+  --color-tg-button-text: var(--tg-button-text, #ffffff);
+  --color-tg-secondary-bg: var(--tg-secondary-bg, #232e3c);
+  --color-tg-header-bg: var(--tg-header-bg, #17212b);
+  --color-tg-accent: var(--tg-accent, #6ab3f3);
+  --color-tg-section-bg: var(--tg-section-bg, #17212b);
+  --color-tg-subtitle: var(--tg-subtitle, #708499);
+  --color-tg-destructive: var(--tg-destructive, #ec3942);
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial,
+    sans-serif;
+}
+
+:root {
+  /* Overwritten by applyViewport(); the fallback keeps SSR-less first paint sane. */
+  --tg-viewport-height: 100dvh;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--tg-bg, #17212b);
+  color: var(--tg-text, #f5f5f5);
+  font-family: var(--font-sans);
+  /*
+   * Stops the rubber-band scroll at the top of the document from propagating
+   * to Telegram's container, which is what triggers drag-to-dock on clients
+   * older than Bot API 7.7 where disableVerticalSwipes is unavailable.
+   */
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  /* Long-press on a page image otherwise pops the system share sheet. */
+  -webkit-touch-callout: none;
+}
+
+/* Utility: full height of the *stable* viewport rather than 100vh. */
+.h-viewport {
+  height: var(--tg-viewport-height);
+}
+
+.min-h-viewport {
+  min-height: var(--tg-viewport-height);
+}
+
+/* Safe-area padding for devices with a notch or home indicator. */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/*
+ * The reader canvas must not scroll, select, or drag. `touch-action: none`
+ * hands every pointer event to our own gesture code; without it the browser
+ * claims horizontal pans for scrolling and the page turn never starts.
+ */
+.reader-surface {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Hide scrollbars on the horizontal shelves without disabling scrolling. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * Respected by the reader: it swaps the 3D turn for a cross-fade rather
+   * than merely shortening the animation.
+   */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      viewport-fit=cover lets the app paint under the notch; the safe-area
+      insets are then reapplied in CSS. user-scalable=no is deliberate: the
+      reader implements its own pinch-zoom, and browser zoom on top of it
+      fights the gesture handler.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="light dark" />
+    <title>Comic Reader</title>
+    <!--
+      The Telegram bridge must exist before React mounts: the app reads
+      themeParams during its first render to avoid a flash of the wrong theme.
+    -->
+    <script src="https://telegram.org/js/telegram-web-app.js?58"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
