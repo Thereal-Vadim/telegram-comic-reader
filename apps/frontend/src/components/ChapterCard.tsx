@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Chapter } from '@comic/shared';
 import { api } from '../api/client';
+import { displayChapterTitle } from '../lib/chapterTitle';
 import { CoverImage } from './CoverImage';
 
 const previewCache = new Map<string, string | null>();
@@ -75,6 +76,7 @@ export function ChapterCard({
   }, [visible, chapter.id, coverUrl]);
 
   const src = coverUrl ?? fallbackCover;
+  const title = displayChapterTitle(chapter.title, chapter.number);
 
   return (
     <button
@@ -84,7 +86,7 @@ export function ChapterCard({
       className="flex w-full flex-col text-left active:opacity-80"
     >
       <div className="relative">
-        <CoverImage src={src} alt={chapter.title} className="w-full" />
+        <CoverImage src={src} alt={title} className="w-full" />
         {badge && (
           <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">
             {badge}
@@ -92,7 +94,7 @@ export function ChapterCard({
         )}
       </div>
       <p className="mt-1.5 line-clamp-2 text-[11px] font-medium leading-snug text-tg-text">
-        {chapter.title}
+        {title}
       </p>
       <p className="mt-0.5 text-[10px] text-tg-hint">
         {chapter.pageCount > 0 ? `${chapter.pageCount} pages` : 'Open'}
