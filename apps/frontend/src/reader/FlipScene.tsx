@@ -1,55 +1,54 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { Color, DoubleSide, PlaneGeometry, ShaderMaterial, type Texture } from 'three';
+import {
+  Color,
+  DoubleSide,
+  PlaneGeometry,
+  ShaderMaterial,
+  Vector2,
+  type Texture,
+} from 'three';
 import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
 import { pageFragmentShader, pageVertexShader } from './shaders';
+import { progressFromTip, restCorner, tipTravel } from './pageCurlMath';
 import { stepSpring, type FlipState, type TurnDirection } from './useFlipGesture';
 
 /**
- * The scene graph for a single-page turn.
+ * Scene graph for an Apple Books–style corner curl.
  *
- * Two sheets are enough. The lower one shows the destination page and never
- * moves; the upper one carries the current page on its front and the
- * destination on its back, and rotates away to reveal what is underneath.
- * A third sheet would be needed for a book-style two-page spread, which the
- * landscape mode below handles by simply widening the page and splitting the
- * texture in the shader.
- *
- * The render loop here is the only thing that runs during a turn. It reads the
- * gesture ref, advances the spring, writes one uniform, and returns. There is
- * no React state in the path, so a 60 Hz turn produces zero reconciliation.
+ * Two sheets: the base shows the destination page; the top sheet carries the
+ * current page on its front and the destination on its back, and deforms so
+ * its corner follows the finger (or a settling spring toward complete/cancel).
  */
 
 export interface FlipSceneProps {
-  /** Live gesture state, mutated by the pointer handlers. */
   gesture: React.RefObject<FlipState>;
   currentTexture: Texture | null;
-  /** Optional hi-res texture for the page under a pinch / double-tap zoom. */
   currentZoomTexture: Texture | null;
   nextTexture: Texture | null;
   prevTexture: Texture | null;
-  /** Page aspect ratio (width / height), used to letterbox correctly. */
   aspect: number;
   paperColor: string;
-  /** Multiplier for page textures (night mode dims bright scans). */
   pageDim?: number;
-  /** Called once a turn has fully settled and the index should advance. */
   onTurnComplete: (direction: TurnDirection) => void;
-  /** Cross-fade instead of rotating, for prefers-reduced-motion. */
   reducedMotion: boolean;
+  /** Reading order — needed so tip springs land on the correct rest corner. */
+  rtl?: boolean;
 }
 
-function createPageMaterial(paperColor: string, pageDim: number): ShaderMaterial {
+function createPageMaterial(paperColor: string, pageDim: number, turning: boolean): ShaderMaterial {
   return new ShaderMaterial({
     vertexShader: pageVertexShader,
     fragmentShader: pageFragmentShader,
     side: DoubleSide,
     transparent: true,
+    depthWrite: turning,
     uniforms: {
-      uProgress: { value: 0 },
       uWidth: { value: 1 },
-      uBowAmount: { value: 0.12 },
-      uTurnSign: { value: 1 },
+      uHeight: { value: 1 },
+      uTip: { value: new Vector2(1, 0) },
+      uOrigin: { value: new Vector2(1, 0) },
+      uActive: { value: 0 },
       uFront: { value: null },
       uBack: { value: null },
       uHasFront: { value: 0 },
@@ -57,6 +56,7 @@ function createPageMaterial(paperColor: string, pageDim: number): ShaderMaterial
       uPaperColor: { value: new Color(paperColor) },
       uOpacity: { value: 1 },
       uPageDim: { value: pageDim },
+      uIsTurning: { value: turning ? 1 : 0 },
     },
   });
 }
@@ -72,12 +72,10 @@ export function FlipScene({
   pageDim = 1,
   onTurnComplete,
   reducedMotion,
+  rtl = false,
 }: FlipSceneProps): React.JSX.Element {
   const { viewport, camera, invalidate } = useThree();
 
-  // Fit the page inside the viewport without distorting it. The page is sized
-  // in world units so that a 1:1 pixel mapping holds at the camera distance,
-  // which keeps the texture crisp instead of resampled.
   const { pageWidth, pageHeight } = useMemo(() => {
     const maxH = viewport.height * 0.98;
     const maxW = viewport.width * 0.98;
@@ -87,20 +85,25 @@ export function FlipScene({
       : { pageWidth: maxW, pageHeight: maxW / aspect };
   }, [viewport.width, viewport.height, aspect]);
 
+  // Dense mesh so the cylinder crease reads as smooth paper, not facets.
   const geometry = useMemo(
-    () => new PlaneGeometry(pageWidth, pageHeight, 32, 1),
+    () => new PlaneGeometry(pageWidth, pageHeight, 64, 64),
     [pageWidth, pageHeight],
   );
-  const sheetMaterial = useMemo(() => createPageMaterial(paperColor, pageDim), []);
-  const baseMaterial = useMemo(() => createPageMaterial(paperColor, pageDim), []);
+  const sheetMaterial = useMemo(() => createPageMaterial(paperColor, pageDim, true), []);
+  const baseMaterial = useMemo(() => createPageMaterial(paperColor, pageDim, false), []);
 
-  // Spring velocity persists across frames but is never read by React.
-  const velocity = useRef(0);
+  const tipVx = useRef(0);
+  const tipVy = useRef(0);
+  const progressVelocity = useRef(0);
 
   useEffect(() => {
     sheetMaterial.uniforms['uWidth']!.value = pageWidth;
+    sheetMaterial.uniforms['uHeight']!.value = pageHeight;
     baseMaterial.uniforms['uWidth']!.value = pageWidth;
-  }, [pageWidth, sheetMaterial, baseMaterial]);
+    baseMaterial.uniforms['uHeight']!.value = pageHeight;
+    invalidate();
+  }, [pageWidth, pageHeight, sheetMaterial, baseMaterial, invalidate]);
 
   useEffect(() => {
     (sheetMaterial.uniforms['uPaperColor']!.value as Color).set(paperColor);
@@ -110,13 +113,10 @@ export function FlipScene({
     invalidate();
   }, [paperColor, pageDim, sheetMaterial, baseMaterial, invalidate]);
 
-  // Redraw when textures arrive under frameloop="demand".
   useEffect(() => {
     invalidate();
   }, [currentTexture, currentZoomTexture, nextTexture, prevTexture, invalidate]);
 
-  // Free the per-scene GPU objects. Textures belong to the TextureManager and
-  // are deliberately left alone.
   useEffect(
     () => () => {
       geometry.dispose();
@@ -130,90 +130,144 @@ export function FlipScene({
     const state = gesture.current;
     if (!state) return;
 
-    // While dragging, progress is the finger position; the spring only takes
-    // over on release. Integrating during the drag would add lag to the touch.
     if (!state.dragging) {
-      // Finger / tap impulse is progress-units per second; consume once.
       if (state.springImpulse !== 0) {
-        velocity.current = state.springImpulse;
+        // Convert progress impulse into tip velocity along X.
+        tipVx.current = state.springImpulse * 0.85;
+        tipVy.current = Math.abs(state.springImpulse) * 0.12;
+        progressVelocity.current = state.springImpulse;
         state.springImpulse = 0;
       }
-      const stepped = stepSpring(state.progress, state.target, velocity.current, delta);
-      state.progress = stepped.value;
-      velocity.current = stepped.velocity;
+
+      const sx = stepSpring(state.tipX, state.targetTipX, tipVx.current, delta);
+      const sy = stepSpring(state.tipY, state.targetTipY, tipVy.current, delta);
+      state.tipX = sx.value;
+      state.tipY = sy.value;
+      tipVx.current = sx.velocity;
+      tipVy.current = sy.velocity;
+
+      if (state.direction) {
+        state.progress = progressFromTip(state.tipX, state.tipY, state.direction, rtl);
+      } else {
+        state.progress = 0;
+      }
     } else {
-      velocity.current = 0;
+      tipVx.current = 0;
+      tipVy.current = 0;
+      progressVelocity.current = 0;
     }
 
-    const p = state.progress;
-    const forward = p >= 0;
-    const magnitude = Math.min(1, Math.abs(p));
-    const turnSign = forward ? 1 : -1;
-
-    // Pick which pages the two sheets show, based on turn direction. Done here
-    // rather than in React so reversing mid-drag is instant.
+    const direction = state.direction;
+    const forward = !direction || direction === 'next';
     const destination = forward ? nextTexture : prevTexture;
-
-    // Prefer the hi-res zoom texture once the camera is past the threshold so
-    // a double-tap / pinch does not just magnify the screen-resolution page.
     const front =
       state.scale >= ZOOM_TEXTURE_THRESHOLD && currentZoomTexture
         ? currentZoomTexture
         : currentTexture;
 
+    const travel = direction
+      ? tipTravel(state.tipX, state.tipY, direction, rtl)
+      : 0;
+    const active = Math.min(1, travel * 2.2);
+
+    const tipUniform = sheetMaterial.uniforms['uTip']!.value as Vector2;
+    const originUniform = sheetMaterial.uniforms['uOrigin']!.value as Vector2;
+    tipUniform.set(state.tipX, state.tipY);
+    originUniform.set(state.originX, state.originY);
+
+    const baseTip = baseMaterial.uniforms['uTip']!.value as Vector2;
+    const baseOrigin = baseMaterial.uniforms['uOrigin']!.value as Vector2;
+    baseTip.set(state.tipX, state.tipY);
+    baseOrigin.set(state.originX, state.originY);
+
     if (reducedMotion) {
-      // Cross-fade: the sheet stays flat and its opacity falls away.
-      sheetMaterial.uniforms['uProgress']!.value = 0;
-      sheetMaterial.uniforms['uOpacity']!.value = 1 - magnitude;
+      const mag = Math.min(1, Math.abs(state.progress));
+      sheetMaterial.uniforms['uActive']!.value = 0;
+      sheetMaterial.uniforms['uOpacity']!.value = 1 - mag;
+      baseMaterial.uniforms['uActive']!.value = 0;
     } else {
-      sheetMaterial.uniforms['uProgress']!.value = magnitude;
+      sheetMaterial.uniforms['uActive']!.value = active;
       sheetMaterial.uniforms['uOpacity']!.value = 1;
+      baseMaterial.uniforms['uActive']!.value = active;
     }
 
-    sheetMaterial.uniforms['uTurnSign']!.value = turnSign;
     sheetMaterial.uniforms['uFront']!.value = front;
     sheetMaterial.uniforms['uHasFront']!.value = front ? 1 : 0;
     sheetMaterial.uniforms['uBack']!.value = destination;
     sheetMaterial.uniforms['uHasBack']!.value = destination ? 1 : 0;
 
-    baseMaterial.uniforms['uTurnSign']!.value = turnSign;
     baseMaterial.uniforms['uFront']!.value = destination;
     baseMaterial.uniforms['uHasFront']!.value = destination ? 1 : 0;
+    baseMaterial.uniforms['uBack']!.value = null;
+    baseMaterial.uniforms['uHasBack']!.value = 0;
 
-    // Pinch zoom and pan are applied to the camera rather than the meshes, so
-    // the deformation maths never has to know about them.
     camera.position.x = -state.panX / 200;
     camera.position.y = state.panY / 200;
     camera.zoom = state.scale;
     camera.updateProjectionMatrix();
 
-    // A settled turn hands control back to React exactly once.
-    // Apply the destination as the resting front *before* resetting progress so
-    // there is no one-frame flash of the old page at progress 0.
-    if (state.settling && !state.dragging && magnitude >= 0.999) {
-      const direction: TurnDirection = forward ? 'next' : 'prev';
+    // Turn is done when the tip has reached (or passed) its complete target.
+    const tipSettled =
+      Math.abs(state.tipX - state.targetTipX) < 0.02 &&
+      Math.abs(state.tipY - state.targetTipY) < 0.02 &&
+      Math.abs(tipVx.current) < 0.05;
+    const completing =
+      state.settling &&
+      direction &&
+      Math.abs(state.target) > 0.5 &&
+      tipSettled;
+
+    if (completing && !state.dragging) {
+      const turnDir: TurnDirection = direction;
       state.settling = false;
       state.progress = 0;
       state.target = 0;
       state.direction = null;
-      velocity.current = 0;
-      sheetMaterial.uniforms['uProgress']!.value = 0;
+      const rest = restCorner('next', rtl); // idle pose; unused until next drag
+      state.tipX = rest.x;
+      state.tipY = rest.y;
+      state.targetTipX = rest.x;
+      state.targetTipY = rest.y;
+      state.originX = rest.x;
+      state.originY = rest.y;
+      tipVx.current = 0;
+      tipVy.current = 0;
+      progressVelocity.current = 0;
+
+      sheetMaterial.uniforms['uActive']!.value = 0;
       sheetMaterial.uniforms['uOpacity']!.value = 1;
       sheetMaterial.uniforms['uFront']!.value = destination;
       sheetMaterial.uniforms['uHasFront']!.value = destination ? 1 : 0;
       sheetMaterial.uniforms['uBack']!.value = null;
       sheetMaterial.uniforms['uHasBack']!.value = 0;
+      baseMaterial.uniforms['uActive']!.value = 0;
       baseMaterial.uniforms['uFront']!.value = destination;
       baseMaterial.uniforms['uHasFront']!.value = destination ? 1 : 0;
-      onTurnComplete(direction);
+
+      onTurnComplete(turnDir);
     }
 
-    // Keep animating only while the sheet or camera is still moving.
+    // Cancelled peel finished returning home.
+    if (
+      !state.dragging &&
+      !state.settling &&
+      direction &&
+      Math.abs(state.target) < 0.001 &&
+      tipSettled &&
+      travel < 0.02
+    ) {
+      state.direction = null;
+      state.progress = 0;
+      sheetMaterial.uniforms['uActive']!.value = 0;
+      baseMaterial.uniforms['uActive']!.value = 0;
+    }
+
     const busy =
       state.dragging ||
       state.settling ||
-      Math.abs(state.progress) > 0.0005 ||
-      Math.abs(velocity.current) > 0.01 ||
+      travel > 0.008 ||
+      Math.abs(tipVx.current) > 0.01 ||
+      Math.abs(tipVy.current) > 0.01 ||
       Math.abs(state.scale - 1) > 0.001 ||
       Math.abs(state.panX) > 0.5 ||
       Math.abs(state.panY) > 0.5;
@@ -222,9 +276,7 @@ export function FlipScene({
 
   return (
     <>
-      {/* Destination page, static beneath the turning sheet. */}
       <mesh geometry={geometry} material={baseMaterial} renderOrder={0} />
-      {/* The sheet that actually turns. */}
       <mesh geometry={geometry} material={sheetMaterial} renderOrder={1} position={[0, 0, 0.001]} />
     </>
   );

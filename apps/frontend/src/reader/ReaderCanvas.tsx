@@ -408,6 +408,7 @@ export function ReaderCanvas({
           pageDim={pageDim}
           onTurnComplete={handleTurnComplete}
           reducedMotion={reducedMotion}
+          rtl={rtl}
         />
       </Canvas>
     </div>

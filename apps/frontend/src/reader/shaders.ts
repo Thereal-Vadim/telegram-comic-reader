@@ -1,73 +1,90 @@
 /**
- * GLSL for the page-turn.
+ * Apple Books–style page curl.
  *
- * Deformation model. The plan sketched a pure moving-fold cylinder, where a
- * fold line sweeps across the page and everything past it wraps around a
- * shrinking cylinder. That produces a convincing peel in the middle of the
- * turn but the wrong end state: at full progress the page is a half-cylinder
- * standing off the surface rather than lying flat on the opposite side. What
- * is implemented here instead is a rotation about the spine combined with a
- * cylindrical bow whose amplitude peaks mid-turn:
- *
- *   phi  = PI * progress                 rotation about the spine
- *   bow  = sin(PI * progress)            0 at both ends, 1 in the middle
- *
- * At progress 0 the page is flat and unrotated; at 1 it is flat again and
- * mirrored onto the other side; in between it bows out exactly as paper does.
- * Same one-uniform drive, same segmented plane, correct resting states.
- *
- * Everything is driven by `uProgress` alone, so a turn is a single uniform
- * write per frame with no attribute uploads and no geometry rebuild.
+ * Classic perpendicular-bisector + cylinder wrap:
+ * the dragged corner (tip) is the current position of the page corner; the fold
+ * is the perpendicular bisector between the rest corner and the tip; vertices
+ * past the fold wrap around a cylinder whose radius shrinks as the turn
+ * progresses. That is the same geometric model iBooks / Apple Books use for
+ * the interactive corner peel — the page stretches from the corner toward
+ * wherever the finger is.
  */
 
 export const pageVertexShader = /* glsl */ `
 precision highp float;
 
-uniform float uProgress;   // 0 = flat and closed, 1 = fully turned
-uniform float uWidth;      // page width in world units
-uniform float uBowAmount;  // peak bow height as a fraction of page width
-uniform float uTurnSign;   // +1 next (spine left), -1 prev (spine right)
+uniform float uWidth;
+uniform float uHeight;
+/** Tip of the curling corner in page UV (0..1). Follows the finger while dragging. */
+uniform vec2 uTip;
+/** Rest position of that corner in page UV (e.g. bottom-right = 1,0). */
+uniform vec2 uOrigin;
+uniform float uActive; // 0 = flat page, 1 = curl engaged
 
 varying vec2 vUv;
 varying float vShade;
+varying float vFresnel;
 
 const float PI = 3.141592653589793;
 
 void main() {
   vUv = uv;
+  vShade = 1.0;
+  vFresnel = 0.0;
 
   vec3 p = position;
   float halfW = uWidth * 0.5;
+  float halfH = uHeight * 0.5;
 
-  // Distance from the active spine. Next peels from the right (hinge left);
-  // prev peels from the left (hinge right) so back-turns do not curl the wrong way.
-  float localX = uTurnSign > 0.0 ? (p.x + halfW) : (halfW - p.x);
-  float u = clamp(localX / uWidth, 0.0, 1.0);
+  // Page local: origin at centre, x right, y up (matches Three plane).
+  vec2 origin = vec2((uOrigin.x - 0.5) * uWidth, (uOrigin.y - 0.5) * uHeight);
+  vec2 tip = vec2((uTip.x - 0.5) * uWidth, (uTip.y - 0.5) * uHeight);
 
-  float phi = PI * uProgress;
-  float bow = sin(PI * uProgress) * uBowAmount * uWidth;
+  vec2 toTip = tip - origin;
+  float travel = length(toTip);
 
-  // The bow is zero at the hinge and grows toward the free edge. A quarter
-  // sine gives a profile close to how paper actually bends: steepest near the
-  // spine, flattening out toward the edge the finger is dragging.
-  float lift = sin(u * PI * 0.5) * bow;
+  if (uActive < 0.001 || travel < 0.0005) {
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    return;
+  }
 
-  // Rotate (localX, lift) about the spine axis, which is vertical, so y is
-  // untouched and this stays a 2D rotation in the xz plane.
-  float c = cos(phi);
-  float s = sin(phi);
-  float rx = localX * c - lift * s;
-  float rz = localX * s + lift * c;
+  vec2 n = toTip / travel;
+  vec2 mid = (origin + tip) * 0.5;
 
-  p.x = uTurnSign > 0.0 ? (rx - halfW) : (halfW - rx);
-  p.z = rz;
+  // Tighter curl as the tip travels further — paper rolls smaller near the end.
+  float t = clamp(travel / (uWidth * 1.15), 0.0, 1.0);
+  float R = mix(uWidth * 0.16, uWidth * 0.045, t);
+  R = max(R, uWidth * 0.03);
 
-  // Cheap directional shading. The surface slope in x is the derivative of the
-  // lift profile; steeper slope means the surface is turned further from the
-  // viewer, so it darkens. This is what makes the curl read as three
-  // dimensional without a light or a normal attribute.
-  float slope = cos(u * PI * 0.5) * bow * (PI * 0.5) / uWidth;
-  vShade = clamp(1.0 - abs(slope) * 0.45, 0.6, 1.0);
+  vec2 q = p.xy;
+  float d = dot(q - mid, n);
+
+  if (d > 0.0) {
+    float angle = d / R;
+
+    if (angle < PI) {
+      // On the cylinder: roll off the page toward the reader.
+      float sA = sin(angle);
+      float cA = cos(angle);
+      p.xy = q - n * d + n * (R * sA);
+      p.z = R * (1.0 - cA);
+      // Directional shade + bright rim on the curl crest.
+      vShade = clamp(0.52 + 0.48 * cA, 0.45, 1.0);
+      vFresnel = pow(1.0 - cA, 2.0) * 0.35;
+    } else {
+      // Past π: page has flipped; lie nearly flat on the back side.
+      float over = (angle - PI) * R;
+      p.xy = mid - n * (R * PI - over);
+      // Slight lift so the back face clears the destination sheet.
+      p.z = 0.002 + min(over * 0.02, 0.02);
+      vShade = 0.88;
+      vFresnel = 0.0;
+    }
+  } else {
+    // Still-flat side of the fold — soft contact shadow near the crease.
+    float crease = exp(d * (10.0 / max(uWidth, 0.001)));
+    vShade = 1.0 - crease * 0.28 * smoothstep(0.0, 0.12, t);
+  }
 
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
 }
@@ -82,27 +99,37 @@ uniform float uHasFront;
 uniform float uHasBack;
 uniform vec3 uPaperColor;
 uniform float uOpacity;
-uniform float uPageDim; // <1 softens bright scans for night / eye comfort
+uniform float uPageDim;
+uniform float uIsTurning; // 1 for the curling sheet, 0 for the static base
+uniform vec2 uTip;
+uniform float uActive;
 
 varying vec2 vUv;
 varying float vShade;
+varying float vFresnel;
 
 void main() {
   vec4 color;
 
   if (gl_FrontFacing) {
-    // Blend against the paper colour so a page whose texture has not landed
-    // yet shows blank paper rather than transparent black.
     color = mix(vec4(uPaperColor, 1.0), texture2D(uFront, vUv), uHasFront);
   } else {
-    // The reverse of a sheet is its mirror image, so flip u. Without this the
-    // back of a turning page shows its content reversed left-to-right.
+    // Underside of the peeling sheet — mirrored so type stays readable.
     vec2 backUv = vec2(1.0 - vUv.x, vUv.y);
     color = mix(vec4(uPaperColor, 1.0), texture2D(uBack, backUv), uHasBack);
   }
 
-  gl_FragColor = vec4(color.rgb * vShade * uPageDim, color.a * uOpacity);
+  color.rgb *= vShade * uPageDim;
+  // Specular kiss along the curl crest (paper highlight).
+  color.rgb += vec3(vFresnel) * 0.55;
+
+  // Soft pooled shadow on the destination page under the moving tip.
+  if (uIsTurning < 0.5 && uActive > 0.01) {
+    vec2 delta = (vUv - uTip) * vec2(1.15, 1.35);
+    float pool = exp(-dot(delta, delta) * 7.5) * uActive * 0.42;
+    color.rgb *= 1.0 - pool;
+  }
+
+  gl_FragColor = vec4(color.rgb, color.a * uOpacity);
 }
 `;
-
-/** Uniform names, centralised so a typo fails at import rather than silently. */
