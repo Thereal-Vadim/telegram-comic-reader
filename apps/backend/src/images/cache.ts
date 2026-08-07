@@ -28,8 +28,8 @@ export class ImageCache {
   readonly #maxBytes: number;
   readonly #index = new Map<string, CacheEntryMeta>();
   #totalBytes = 0;
-  /** Serializes eviction so two concurrent writes cannot both trim to the cap. */
-  #evicting: Promise<void> | null = null;
+  /** Tail of the eviction chain; see {@link #scheduleEvict}. */
+  #evicting: Promise<void> = Promise.resolve();
 
   constructor(dir: string, maxBytes: number) {
     this.#dir = dir;
@@ -128,13 +128,23 @@ export class ImageCache {
     this.#index.set(key, { key, bytes: data.byteLength, lastAccess: Date.now() });
     this.#totalBytes += data.byteLength;
 
-    if (this.#totalBytes > this.#maxBytes) void this.#scheduleEvict();
+    // Awaited rather than fired and forgotten: a caller that has just written
+    // needs the cache to be back under its cap before it returns, otherwise a
+    // burst of writes leaves it permanently over.
+    if (this.#totalBytes > this.#maxBytes) await this.#scheduleEvict();
   }
 
+  /**
+   * Queue an eviction pass behind any already in flight.
+   *
+   * Coalescing concurrent callers onto a single in-flight pass looks like the
+   * obvious optimisation but is wrong: a write that lands after that pass has
+   * taken its size snapshot is never accounted for, so the cache settles above
+   * the cap and stays there. Chaining gives every write its own pass, and a
+   * pass that finds nothing to do returns immediately.
+   */
   #scheduleEvict(): Promise<void> {
-    this.#evicting ??= this.#evict().finally(() => {
-      this.#evicting = null;
-    });
+    this.#evicting = this.#evicting.then(() => this.#evict()).catch(() => undefined);
     return this.#evicting;
   }
 
