@@ -27,7 +27,7 @@ export function registerComxRoutes(
   app.get('/api/comx/search', { preHandler: guard }, async (request, reply) => {
     const query = request.query as { q?: string; page?: string };
     if (!query.q?.trim()) {
-      throw new AppError('BAD_REQUEST', 'query parameter "q" is required');
+      return reply.send({ items: [], currentPage: 1, totalPages: 1, hasNextPage: false });
     }
     const pageNum = Number.parseInt(query.page || '1', 10);
     if (!Number.isFinite(pageNum) || pageNum < 1) {

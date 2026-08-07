@@ -70,20 +70,14 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
   };
 
   // com-x HTML + CDN images: any public host, private ranges still blocked.
+  // The adapter owns a cookie jar + PoW solver on top of this guard.
   const comxGuard: GuardOptions = {
     allowedHosts: new Set<string>(),
     allowPrivate: false,
     allowAnyPublicHost: true,
   };
-  const comxFetch = async (url: string, headers: Record<string, string> = {}) =>
-    safeFetchFollowingRedirects(url, comxGuard, {
-      headers,
-      timeoutMs: 30_000,
-      maxBytes: cfg.imageMaxSourceBytes,
-      accept: headers['accept'] ?? headers['Accept'] ?? '*/*',
-    });
 
-  const { registry, comx } = buildRegistry(cfg, opdsFetch, comxFetch);
+  const { registry, comx } = buildRegistry(cfg, opdsFetch, comxGuard);
   guardOptions = { allowedHosts: registry.proxyHosts, allowPrivate: cfg.allowPrivateUpstream };
 
   const cache = new ImageCache(cfg.imageCacheDir, cfg.imageCacheMaxBytes);

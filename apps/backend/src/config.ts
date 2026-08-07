@@ -57,6 +57,13 @@ const RawConfig = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  /**
+   * Optional DLE credentials. com-x.life currently gates the catalog behind
+   * a login wall after the anti-bot challenge; without these the adapter
+   * can solve the PoW gate but cannot read comics.
+   */
+  COMX_LOGIN: z.string().default(''),
+  COMX_PASSWORD: z.string().default(''),
 
   /**
    * Ceiling for a whole CBZ download from an OPDS acquisition link (individual
@@ -159,6 +166,8 @@ export interface Config {
   readonly localLibraryDir: string | undefined;
   readonly opdsCatalogs: OpdsCatalogConfig[];
   readonly comxEnabled: boolean;
+  readonly comxLogin: string | undefined;
+  readonly comxPassword: string | undefined;
   readonly archiveMaxBytes: number;
   readonly imageCacheDir: string;
   readonly imageCacheMaxBytes: number;
@@ -204,6 +213,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     localLibraryDir: raw.LOCAL_LIBRARY_DIR ? path.resolve(raw.LOCAL_LIBRARY_DIR) : undefined,
     opdsCatalogs,
     comxEnabled: raw.COMX_ENABLED,
+    comxLogin: raw.COMX_LOGIN || undefined,
+    comxPassword: raw.COMX_PASSWORD || undefined,
     archiveMaxBytes: raw.ARCHIVE_MAX_BYTES,
     imageCacheDir: path.resolve(cacheDir),
     imageCacheMaxBytes: raw.IMAGE_CACHE_MAX_BYTES,

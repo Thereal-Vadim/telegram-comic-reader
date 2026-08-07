@@ -14,7 +14,9 @@ import type { Config } from '../config.js';
 import { LocalAdapter } from './local.js';
 import { OpdsAdapter, type GuardedFetch } from './opds.js';
 import { ComxAdapter } from './comxAdapter.js';
+import { ComxSession } from './comxSession.js';
 import type { ImageSource, ProviderAdapter, SearchArgs } from './types.js';
+import type { GuardOptions } from '../net/ssrf.js';
 
 /**
  * Owns the set of configured adapters and is the only place that knows about
@@ -252,7 +254,11 @@ export class AdapterRegistry {
 export function buildRegistry(
   cfg: Config,
   guardedFetch: GuardedFetch,
-  comxFetch: GuardedFetch = guardedFetch,
+  comxGuard: GuardOptions = {
+    allowedHosts: new Set<string>(),
+    allowPrivate: false,
+    allowAnyPublicHost: true,
+  },
 ): { registry: AdapterRegistry; comx: ComxAdapter | null } {
   const adapters: ProviderAdapter[] = [];
   let comx: ComxAdapter | null = null;
@@ -273,7 +279,18 @@ export function buildRegistry(
   }
 
   if (cfg.comxEnabled) {
-    comx = new ComxAdapter(comxFetch);
+    const credentials =
+      cfg.comxLogin && cfg.comxPassword
+        ? { login: cfg.comxLogin, password: cfg.comxPassword }
+        : undefined;
+    const session = new ComxSession(comxGuard, {
+      ...(credentials ? { credentials } : {}),
+      maxBytes: cfg.imageMaxSourceBytes,
+    });
+    comx = new ComxAdapter({
+      session,
+      ...(credentials ? { credentials } : {}),
+    });
     adapters.push(comx);
   }
 
