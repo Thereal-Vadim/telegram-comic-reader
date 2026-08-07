@@ -93,6 +93,9 @@ export interface FlipGestureHandles {
   };
   startTurn: (direction: TurnDirection) => void;
   resetZoom: () => void;
+  /** Adjust camera scale from the settings sheet (positive = zoom in). */
+  nudgeScale: (delta: number) => void;
+  getScale: () => number;
 }
 
 interface PointerRecord {
@@ -345,6 +348,15 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     s.panY = 0;
     callbacks.current.onScaleChange?.(1);
   }, []);
+
+  const nudgeScale = useCallback(
+    (delta: number) => {
+      setScale(state.current.scale + delta);
+    },
+    [setScale],
+  );
+
+  const getScale = useCallback(() => state.current.scale, []);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -654,7 +666,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     return () => document.removeEventListener('visibilitychange', clear);
   }, [cancelTurn]);
 
-  return { state, bind, startTurn, resetZoom };
+  return { state, bind, startTurn, resetZoom, nudgeScale, getScale };
 }
 
 /**

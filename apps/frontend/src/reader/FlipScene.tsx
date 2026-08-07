@@ -9,8 +9,10 @@ import {
   ShaderMaterial,
   Vector2,
   Vector3,
+  type Mesh,
   type Texture,
 } from 'three';
+import type { PageAnimation } from '../store/reader';
 import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
 import {
   paperLerpAlpha,
@@ -23,11 +25,14 @@ import { flatVertexShader, pageFragmentShader, pageVertexShader } from './shader
 import type { FlipState, TurnDirection } from './useFlipGesture';
 
 /**
- * Apple Books true physics curl.
+ * Page turn renderer.
  *
- * Finger → page plane via THREE.Raycaster (same as the reference demo).
- * Base sheet stays flat; only the top sheet uses the bisector cylinder shader.
+ * `curl` — Apple Books perpendicular-bisector cylinder (Raycaster-driven).
+ * `slide` — flat sheets that translate horizontally with the tip.
+ * `fade` — flat cross-fade (also used when reduced-motion is on).
  */
+
+export type FlipAnimation = Exclude<PageAnimation, 'scroll'>;
 
 export interface FlipSceneProps {
   gesture: React.RefObject<FlipState>;
@@ -40,6 +45,7 @@ export interface FlipSceneProps {
   aspect: number;
   paperColor: string;
   pageDim?: number;
+  animation?: FlipAnimation;
   onTurnComplete: (direction: TurnDirection) => void;
   reducedMotion: boolean;
   rtl?: boolean;
@@ -94,11 +100,15 @@ export function FlipScene({
   aspect,
   paperColor,
   pageDim = 1,
+  animation = 'curl',
   onTurnComplete,
   reducedMotion,
   rtl = false,
 }: FlipSceneProps): React.JSX.Element {
   const { viewport, camera, invalidate } = useThree();
+  const sheetMesh = useRef<Mesh>(null);
+  const baseMesh = useRef<Mesh>(null);
+  const mode: FlipAnimation = reducedMotion ? 'fade' : animation;
 
   const { pageWidth, pageHeight } = useMemo(() => {
     const maxH = viewport.height * 0.98;
@@ -152,6 +162,13 @@ export function FlipScene({
   useEffect(() => {
     invalidate();
   }, [currentTexture, currentZoomTexture, nextTexture, prevTexture, invalidate]);
+
+  // Swap curl vs flat vertex program when the user picks an animation.
+  useEffect(() => {
+    sheetMaterial.vertexShader = mode === 'curl' ? pageVertexShader : flatVertexShader;
+    sheetMaterial.needsUpdate = true;
+    invalidate();
+  }, [mode, sheetMaterial, invalidate]);
 
   useEffect(
     () => () => {
@@ -224,12 +241,13 @@ export function FlipScene({
 
     // Curl engages as soon as tip leaves the corner (demo: distToCorner > 0.001).
     const active = direction && travel > 0.001 ? 1 : 0;
+    const mag = Math.min(1, Math.abs(state.progress));
 
     cornerWorld.current.copy(uvToPage(state.originX, state.originY, pageWidth, pageHeight));
     pointerWorld.current.copy(uvToPage(state.tipX, state.tipY, pageWidth, pageHeight));
 
     // Idle: pin pointer on the corner so the shader early-outs (no fold).
-    if (!direction || active === 0) {
+    if (!direction || active === 0 || mode !== 'curl') {
       pointerWorld.current.copy(cornerWorld.current);
     }
 
@@ -239,15 +257,27 @@ export function FlipScene({
       (mat.uniforms['uTip']!.value as Vector2).set(state.tipX, state.tipY);
     }
 
-    if (reducedMotion) {
-      const mag = Math.min(1, Math.abs(state.progress));
-      sheetMaterial.uniforms['uActive']!.value = 0;
-      sheetMaterial.uniforms['uOpacity']!.value = 1 - mag;
-      baseMaterial.uniforms['uActive']!.value = 0;
-    } else {
+    if (mode === 'curl') {
       sheetMaterial.uniforms['uActive']!.value = active;
       sheetMaterial.uniforms['uOpacity']!.value = 1;
       baseMaterial.uniforms['uActive']!.value = active;
+      if (sheetMesh.current) sheetMesh.current.position.set(0, 0, 0.002);
+      if (baseMesh.current) baseMesh.current.position.set(0, 0, 0);
+    } else if (mode === 'slide') {
+      sheetMaterial.uniforms['uActive']!.value = 0;
+      sheetMaterial.uniforms['uOpacity']!.value = 1;
+      baseMaterial.uniforms['uActive']!.value = 0;
+      const signed = state.progress; // + next, − prev
+      const dx = -signed * pageWidth;
+      if (sheetMesh.current) sheetMesh.current.position.set(dx, 0, 0.002);
+      if (baseMesh.current) baseMesh.current.position.set(0, 0, 0);
+    } else {
+      // Fast fade
+      sheetMaterial.uniforms['uActive']!.value = 0;
+      sheetMaterial.uniforms['uOpacity']!.value = 1 - mag;
+      baseMaterial.uniforms['uActive']!.value = 0;
+      if (sheetMesh.current) sheetMesh.current.position.set(0, 0, 0.002);
+      if (baseMesh.current) baseMesh.current.position.set(0, 0, 0);
     }
 
     sheetMaterial.uniforms['uFront']!.value = front;
@@ -337,8 +367,9 @@ export function FlipScene({
 
   return (
     <>
-      <mesh geometry={geometry} material={baseMaterial} renderOrder={0} />
+      <mesh ref={baseMesh} geometry={geometry} material={baseMaterial} renderOrder={0} />
       <mesh
+        ref={sheetMesh}
         geometry={geometry}
         material={sheetMaterial}
         renderOrder={1}
