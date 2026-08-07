@@ -2,22 +2,24 @@ import { accessSync } from 'node:fs';
 import { AppError } from '@comic/shared';
 import type { ComxCredentials } from './comxSession.js';
 
-/** Browser-world helpers — typed loosely so Node's tsconfig need not include DOM. */
-type BrowserDoc = {
-  querySelector(selectors: string): BrowserEl | null;
-  querySelectorAll(selectors: string): ArrayLike<BrowserEl>;
-};
-type BrowserEl = {
-  textContent?: string | null;
+/**
+ * Loose DOM shapes for code that runs inside page.evaluate.
+ * Must not close over Node helpers — Puppeteer serializes only the function body.
+ */
+type InPageEl = {
+  textContent: string | null;
   value?: string;
   hidden?: boolean;
-  style?: { display?: string };
+  style: { display: string };
   click(): void;
   requestSubmit?: () => void;
   submit?: () => void;
   scrollIntoView(arg?: unknown): void;
 };
-const browserDoc = (): BrowserDoc => (globalThis as unknown as { document: BrowserDoc }).document;
+type InPageDoc = {
+  querySelector(selectors: string): InPageEl | null;
+  querySelectorAll(selectors: string): ArrayLike<InPageEl>;
+};
 
 const BASE_URL = 'https://com-x.life';
 
@@ -61,14 +63,15 @@ async function typeLikeHuman(
   const handle = await page.waitForSelector(selector, { visible: true, timeout: 15_000 });
   if (!handle) throw new AppError('UPSTREAM_UNAVAILABLE', `comx field missing: ${selector}`);
   await handle.evaluate((el) => {
-    (el as unknown as BrowserEl).scrollIntoView({ block: 'center', inline: 'nearest' });
+    (el as unknown as InPageEl).scrollIntoView({ block: 'center', inline: 'nearest' });
   });
   await humanPause(150, 350);
   await handle.click({ clickCount: 1 });
   await humanPause(120, 280);
-  // Clear existing value without brittle triple-click.
+  // Inline globalThis access — outer inPageDoc() is not available in the page world.
   await page.evaluate((sel) => {
-    const input = browserDoc().querySelector(sel);
+    const doc = (globalThis as unknown as { document: InPageDoc }).document;
+    const input = doc.querySelector(sel);
     if (input && typeof input.value === 'string') input.value = '';
   }, selector);
   await handle.focus();
@@ -127,7 +130,7 @@ export async function loginComxWithBrowser(
 
     // Password form may be hidden behind the magic-link primary panel.
     const altClicked = await page.evaluate(() => {
-      const doc = browserDoc();
+      const doc = (globalThis as unknown as { document: InPageDoc }).document;
       const nodes = Array.from(doc.querySelectorAll('a, button, span, div'));
       const alt =
         doc.querySelector('.js-gate-alt') ||
@@ -142,10 +145,12 @@ export async function loginComxWithBrowser(
 
     // Unhide secondary login panel if still marked hidden.
     await page.evaluate(() => {
-      const secondary = browserDoc().querySelector('.js-gate-secondary');
+      const secondary = (globalThis as unknown as { document: InPageDoc }).document.querySelector(
+        '.js-gate-secondary',
+      );
       if (secondary) {
         secondary.hidden = false;
-        if (secondary.style) secondary.style.display = 'block';
+        secondary.style.display = 'block';
       }
     });
 
@@ -164,7 +169,7 @@ export async function loginComxWithBrowser(
       .catch(() => undefined);
 
     const submitted = await page.evaluate(() => {
-      const doc = browserDoc();
+      const doc = (globalThis as unknown as { document: InPageDoc }).document;
       const form =
         doc.querySelector('form[method="post"]') ||
         doc.querySelector('.js-gate-secondary form') ||
