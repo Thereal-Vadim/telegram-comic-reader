@@ -173,8 +173,6 @@ export function ReaderPage(): React.JSX.Element {
 
   const displayTitle = comicTitle || title || 'Reading';
   const isScroll = pageAnimation === 'scroll';
-  // Subtle ink that stays legible on both light and dark ambients.
-  const hudInk = isDark(ambientColor) ? 'rgba(255,255,255,0.72)' : 'rgba(28,28,30,0.55)';
 
   if (loading) return <Spinner label="Opening chapter" />;
   if (error) return <ErrorState error={error} onRetry={() => window.location.reload()} />;
@@ -214,48 +212,53 @@ export function ReaderPage(): React.JSX.Element {
         />
       )}
 
-      {/* Always-on Apple Books HUD: title + page counter */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 pt-safe">
-        <div className="flex items-start justify-between px-4 pb-2 pt-3">
-          <span className="w-10" />
-          <p
-            className="min-w-0 flex-1 truncate text-center text-[13px] font-medium tracking-wide"
-            style={{ color: hudInk }}
-          >
-            {displayTitle}
-          </p>
-          {chromeVisible ? (
-            <button
-              type="button"
-              aria-label="Close reader"
-              onClick={() => {
-                impact('light');
-                void navigate(-1);
-              }}
-              className="pointer-events-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-black/10 text-base font-medium backdrop-blur-md"
-              style={{ color: isDark(ambientColor) ? '#fff' : '#1c1c1e' }}
-            >
-              ×
-            </button>
-          ) : (
-            <span className="w-10" />
-          )}
+      {/* HUD — same tokens as the Mini App chrome (tg-text / soft black scrims). */}
+      <div
+        className={`pointer-events-none absolute inset-x-0 top-0 z-30 pt-safe transition-opacity duration-200 ${
+          chromeVisible ? 'opacity-100' : 'opacity-90'
+        }`}
+      >
+        <div className="bg-gradient-to-b from-black/65 via-black/25 to-transparent px-4 pb-8 pt-3">
+          <div className="flex items-center gap-3">
+            {chromeVisible ? (
+              <button
+                type="button"
+                onClick={() => {
+                  impact('light');
+                  void navigate(-1);
+                }}
+                className="pointer-events-auto shrink-0 rounded-lg bg-black/40 px-3 py-1.5 text-sm font-medium text-white"
+              >
+                Back
+              </button>
+            ) : (
+              <span className="w-14 shrink-0" />
+            )}
+            <div className="min-w-0 flex-1 text-center">
+              <p className="truncate text-sm font-semibold text-white/95">{displayTitle}</p>
+              {(title && comicTitle) || source ? (
+                <p className="truncate text-[11px] text-white/65">
+                  {title && comicTitle ? title : ''}
+                  {title && comicTitle && source ? ' · ' : ''}
+                  {source === 'offline' ? 'Offline' : source === 'network' ? 'Streaming' : ''}
+                </p>
+              ) : null}
+            </div>
+            <span className="w-14 shrink-0" />
+          </div>
         </div>
-        {title && comicTitle && chromeVisible && (
-          <p className="px-12 text-center text-[11px]" style={{ color: hudInk }}>
-            {title}
-            {source === 'offline' ? ' · Offline' : ''}
-          </p>
-        )}
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 pb-safe">
-        <p
-          className="px-4 pb-3 pt-2 text-center text-[13px] font-medium tabular-nums tracking-wide"
-          style={{ color: hudInk }}
-        >
-          {clampedIndex + 1}/{pages.length}
-        </p>
+      <div
+        className={`pointer-events-none absolute inset-x-0 bottom-0 z-30 pb-safe transition-opacity duration-200 ${
+          chromeVisible ? 'opacity-0' : 'opacity-100'
+        }`}
+      >
+        <div className="bg-gradient-to-t from-black/55 to-transparent px-4 pb-3 pt-8">
+          <p className="text-center text-xs font-medium tabular-nums text-white/80">
+            {clampedIndex + 1}/{pages.length}
+          </p>
+        </div>
       </div>
 
       <ReaderSettingsSheet
@@ -277,15 +280,6 @@ export function ReaderPage(): React.JSX.Element {
       {showStats && stats && <StatsOverlay stats={stats} />}
     </div>
   );
-}
-
-function isDark(hex: string): boolean {
-  const raw = hex.replace('#', '');
-  if (raw.length < 6) return true;
-  const r = parseInt(raw.slice(0, 2), 16);
-  const g = parseInt(raw.slice(2, 4), 16);
-  const b = parseInt(raw.slice(4, 6), 16);
-  return (r * 299 + g * 587 + b * 114) / 1000 < 140;
 }
 
 function StatsOverlay({ stats }: { stats: TextureStats }): React.JSX.Element {

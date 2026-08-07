@@ -9,16 +9,15 @@ import {
 import { useHaptics } from '../telegram/hooks';
 
 /**
- * Apple Books–style Themes & Settings bottom sheet.
+ * Reader settings sheet — same visual language as the rest of the Mini App.
  *
- * Scale, page-turn animation, and paper themes. Opened by a centre tap while
- * reading; closed via the X or by tapping the dimmed backdrop.
+ * Uses Telegram theme tokens (`tg-bg`, `tg-secondary-bg`, `tg-button`, …),
+ * `rounded-xl` panels, and uppercase section labels — not an iOS Books clone.
  */
 
 export interface ReaderSettingsSheetProps {
   open: boolean;
   onClose: () => void;
-  /** Current camera scale from the canvas (1 = fit). */
   scale: number;
   onNudgeScale: (delta: number) => void;
   pageIndex: number;
@@ -48,80 +47,45 @@ export function ReaderSettingsSheet({
 
   if (!open) return null;
 
-  const animLabel =
-    PAGE_ANIMATIONS.find((a) => a.id === pageAnimation)?.label ?? 'Curl';
+  const animMeta = PAGE_ANIMATIONS.find((a) => a.id === pageAnimation);
 
   return (
     <div className="absolute inset-0 z-40 flex flex-col justify-end">
       <button
         type="button"
         aria-label="Dismiss settings"
-        className="absolute inset-0 bg-black/25"
+        className="absolute inset-0 bg-black/50"
         onClick={() => {
           impact('soft');
           onClose();
         }}
       />
 
-      {/* Animation picker popover (Apple Books style). */}
-      {animOpen && (
-        <div className="pointer-events-auto absolute inset-x-0 bottom-[42%] z-50 flex justify-center px-6">
-          <div className="w-full max-w-sm overflow-hidden rounded-2xl bg-[#f2f2f7]/95 shadow-2xl backdrop-blur-xl">
-            <ul>
-              {PAGE_ANIMATIONS.map((anim, i) => {
-                const selected = pageAnimation === anim.id;
-                return (
-                  <li key={anim.id}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        impact('soft');
-                        setPageAnimation(anim.id);
-                        setAnimOpen(false);
-                      }}
-                      className={`flex w-full items-center gap-3 px-4 py-3.5 text-left ${
-                        i > 0 ? 'border-t border-black/10' : ''
-                      }`}
-                    >
-                      <span className="w-5 text-center text-sm text-[#007aff]">
-                        {selected ? '✓' : ''}
-                      </span>
-                      <AnimationIcon id={anim.id} />
-                      <span className="flex-1 text-[15px] font-medium text-[#1c1c1e]">
-                        {anim.label}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </div>
-      )}
-
-      <div className="pointer-events-auto relative mx-2 mb-2 max-h-[78%] overflow-y-auto rounded-[28px] bg-[#f2f2f7]/92 pb-safe shadow-2xl backdrop-blur-2xl">
-        <header className="sticky top-0 z-10 flex items-center gap-3 bg-[#f2f2f7]/92 px-4 pb-3 pt-4 backdrop-blur-xl">
+      <div className="pointer-events-auto relative max-h-[80%] overflow-y-auto rounded-t-2xl border-t border-white/10 bg-tg-bg/95 pb-safe shadow-[0_-8px_32px_rgba(0,0,0,0.45)] backdrop-blur supports-[backdrop-filter]:bg-tg-bg/90">
+        <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/5 bg-tg-bg/95 px-4 py-3 backdrop-blur">
           <button
             type="button"
-            aria-label="Close"
             onClick={() => {
               impact('light');
               onClose();
             }}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-black/10 text-lg font-medium text-[#1c1c1e]"
+            className="rounded-lg bg-tg-secondary-bg px-3 py-1.5 text-sm font-medium text-tg-text"
           >
-            ×
+            Close
           </button>
-          <h2 className="flex-1 text-center text-[17px] font-semibold text-[#1c1c1e]">
-            Themes & Settings
-          </h2>
-          <span className="w-9" />
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-sm font-bold text-tg-text">Reading settings</h2>
+            <p className="truncate text-[11px] text-tg-hint">Scale, turn style, and paper</p>
+          </div>
         </header>
 
-        <div className="space-y-5 px-4 pb-5">
-          {/* Scale + animation entry */}
-          <div className="flex gap-3">
-            <div className="flex flex-1 items-center justify-between rounded-2xl bg-white px-2 py-1.5 shadow-sm">
+        <div className="space-y-6 px-4 py-4">
+          {/* Scale */}
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+              Scale
+            </h3>
+            <div className="mt-2 flex items-center gap-2 rounded-xl bg-tg-secondary-bg p-2">
               <button
                 type="button"
                 aria-label="Zoom out"
@@ -130,13 +94,16 @@ export function ReaderSettingsSheet({
                   impact('soft');
                   onNudgeScale(-0.35);
                 }}
-                className="flex h-10 w-12 items-center justify-center rounded-xl text-[15px] font-semibold text-[#1c1c1e] disabled:opacity-35"
+                className="rounded-lg bg-black/25 px-4 py-2.5 text-sm font-semibold text-tg-text disabled:opacity-40"
               >
-                <span className="text-sm">A</span>
+                −
               </button>
-              <span className="tabular-nums text-xs text-[#8e8e93]">
-                {Math.round(scale * 100)}%
-              </span>
+              <div className="min-w-0 flex-1 text-center">
+                <p className="tabular-nums text-sm font-semibold text-tg-text">
+                  {Math.round(scale * 100)}%
+                </p>
+                <p className="text-[11px] text-tg-hint">Pinch or double-tap also zooms</p>
+              </div>
               <button
                 type="button"
                 aria-label="Zoom in"
@@ -145,78 +112,143 @@ export function ReaderSettingsSheet({
                   impact('soft');
                   onNudgeScale(0.35);
                 }}
-                className="flex h-10 w-12 items-center justify-center rounded-xl text-[22px] font-semibold text-[#1c1c1e] disabled:opacity-35"
+                className="rounded-lg bg-black/25 px-4 py-2.5 text-sm font-semibold text-tg-text disabled:opacity-40"
               >
-                A
+                +
               </button>
             </div>
+          </section>
 
+          {/* Page animation */}
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+              Page turn
+            </h3>
             <button
               type="button"
               onClick={() => {
                 impact('soft');
                 setAnimOpen((v) => !v);
               }}
-              className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm"
+              className="mt-2 flex w-full items-center gap-3 rounded-xl bg-tg-secondary-bg px-3 py-3 text-left"
             >
-              <AnimationIcon id={pageAnimation} />
-              <span className="text-[15px] font-medium text-[#1c1c1e]">{animLabel}</span>
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/25 text-tg-link">
+                <AnimationIcon id={pageAnimation} />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-tg-text">
+                  {animMeta?.label ?? 'Curl'}
+                </span>
+                <span className="block text-xs text-tg-hint">
+                  {animMeta?.description ?? 'Page animation'}
+                </span>
+              </span>
+              <span className="text-xs text-tg-link">{animOpen ? 'Hide' : 'Change'}</span>
             </button>
-          </div>
 
-          {/* Theme grid */}
-          <div className="grid grid-cols-3 gap-2.5">
-            {PAPER_PRESETS.map((preset) => {
-              const selected = paperPreset === preset.id;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => {
-                    impact('soft');
-                    setPaperPreset(preset.id as PaperPresetId);
-                  }}
-                  className={`flex flex-col items-start rounded-2xl px-3 py-3 text-left transition-shadow ${
-                    selected ? 'ring-[3px] ring-[#1c1c1e]' : 'ring-1 ring-black/10'
-                  }`}
-                  style={{ backgroundColor: preset.paperColor }}
-                >
-                  <span
-                    className="text-[22px] font-serif leading-none"
-                    style={{ color: preset.inkColor }}
+            {animOpen && (
+              <ul className="mt-2 overflow-hidden rounded-xl bg-tg-secondary-bg">
+                {PAGE_ANIMATIONS.map((anim, i) => {
+                  const selected = pageAnimation === anim.id;
+                  return (
+                    <li key={anim.id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          impact('soft');
+                          setPageAnimation(anim.id);
+                          setAnimOpen(false);
+                        }}
+                        className={`flex w-full items-center gap-3 px-3 py-3 text-left ${
+                          i > 0 ? 'border-t border-white/5' : ''
+                        } ${selected ? 'bg-tg-button/15' : ''}`}
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/25 text-tg-text">
+                          <AnimationIcon id={anim.id} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-medium text-tg-text">
+                            {anim.label}
+                          </span>
+                          <span className="block text-xs text-tg-hint">{anim.description}</span>
+                        </span>
+                        {selected && (
+                          <span className="text-xs font-semibold text-tg-link">On</span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          {/* Paper / ambient themes */}
+          <section>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+              Background
+            </h3>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {PAPER_PRESETS.map((preset) => {
+                const selected = paperPreset === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => {
+                      impact('soft');
+                      setPaperPreset(preset.id as PaperPresetId);
+                    }}
+                    className={`overflow-hidden rounded-xl text-left transition-shadow ${
+                      selected
+                        ? 'ring-2 ring-tg-button ring-offset-2 ring-offset-tg-bg'
+                        : 'ring-1 ring-white/10'
+                    }`}
                   >
-                    Aa
-                  </span>
-                  <span
-                    className="mt-2 text-[12px] font-medium"
-                    style={{ color: preset.inkColor }}
-                  >
-                    {preset.label}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+                    <span
+                      className="flex aspect-[4/3] items-end px-2.5 pb-2 pt-3"
+                      style={{ backgroundColor: preset.paperColor }}
+                    >
+                      <span
+                        className="text-lg font-semibold leading-none"
+                        style={{ color: preset.inkColor }}
+                      >
+                        Aa
+                      </span>
+                    </span>
+                    <span className="block bg-tg-secondary-bg px-2.5 py-1.5 text-[11px] font-medium text-tg-text">
+                      {preset.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
 
           {/* Page scrubber */}
           {pageCount > 1 && (
-            <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
-              <div className="mb-2 flex items-baseline justify-between text-xs text-[#8e8e93]">
-                <span>Page</span>
-                <span className="tabular-nums text-[#1c1c1e]">
-                  {pageIndex + 1} / {pageCount}
-                </span>
+            <section>
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
+                Jump to page
+              </h3>
+              <div className="mt-2 rounded-xl bg-tg-secondary-bg px-3 py-3">
+                <div className="mb-2 flex items-baseline justify-between text-xs">
+                  <span className="text-tg-hint">Page</span>
+                  <span className="tabular-nums font-medium text-tg-text">
+                    {pageIndex + 1} / {pageCount}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={pageCount - 1}
+                  value={pageIndex}
+                  onChange={(e) => onScrubPage(Number(e.target.value))}
+                  aria-label="Page"
+                  className="w-full accent-tg-button"
+                />
               </div>
-              <input
-                type="range"
-                min={0}
-                max={pageCount - 1}
-                value={pageIndex}
-                onChange={(e) => onScrubPage(Number(e.target.value))}
-                aria-label="Page"
-                className="w-full accent-[#1c1c1e]"
-              />
-            </div>
+            </section>
           )}
         </div>
       </div>
@@ -225,7 +257,7 @@ export function ReaderSettingsSheet({
 }
 
 function AnimationIcon({ id }: { id: PageAnimation }): React.JSX.Element {
-  const common = 'h-5 w-5 text-[#1c1c1e]';
+  const common = 'h-4 w-4';
   switch (id) {
     case 'slide':
       return (
