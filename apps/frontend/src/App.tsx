@@ -1,57 +1,73 @@
 import { Suspense, lazy, useEffect } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { bootOk, bootStage } from './boot/log';
-import { BootScreen } from './components/BootScreen';
 import { Spinner } from './components/states';
 import { HomePage } from './pages/HomePage';
-import { SearchPage } from './pages/SearchPage';
-import { ComicDetailPage } from './pages/ComicDetailPage';
-import { ChapterPage } from './pages/ChapterPage';
-import { DownloadsPage } from './pages/DownloadsPage';
-import { SettingsPage } from './pages/SettingsPage';
 import { useLibrary } from './store/library';
 import { downloads } from './workers/downloadManager';
 
 /**
  * App shell and routing.
  *
- * The reader is code-split. It pulls in three plus the R3F runtime, roughly
- * 600 KB, which would otherwise be parsed on every cold start including the
- * many where the user only browses the catalog.
+ * Home stays eager (default landing). Everything else — including the ~600 KB
+ * three.js reader — is code-split so a cold open that only browses the catalog
+ * never pays for detail/search/downloads/settings/WebGL parse time.
  */
+const SearchPage = lazy(() =>
+  import('./pages/SearchPage').then((m) => ({ default: m.SearchPage })),
+);
+const ComicDetailPage = lazy(() =>
+  import('./pages/ComicDetailPage').then((m) => ({ default: m.ComicDetailPage })),
+);
+const ChapterPage = lazy(() =>
+  import('./pages/ChapterPage').then((m) => ({ default: m.ChapterPage })),
+);
 const ReaderPage = lazy(() =>
   import('./pages/ReaderPage').then((m) => ({ default: m.ReaderPage })),
 );
+const DownloadsPage = lazy(() =>
+  import('./pages/DownloadsPage').then((m) => ({ default: m.DownloadsPage })),
+);
+const SettingsPage = lazy(() =>
+  import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+);
+
+function scheduleIdle(task: () => void): void {
+  const ric = (
+    window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }
+  ).requestIdleCallback;
+  if (typeof ric === 'function') {
+    ric(task, { timeout: 2000 });
+    return;
+  }
+  window.setTimeout(task, 250);
+}
 
 export function App(): React.JSX.Element {
   const hydrate = useLibrary((s) => s.hydrate);
-  const hydrated = useLibrary((s) => s.hydrated);
   const location = useLocation();
 
   useEffect(() => {
     bootStage('indexeddb', 'Reading favourites and progress');
     void hydrate().then(() => bootOk('indexeddb', 'local library ready'));
-    // Picks up anything interrupted by the previous session closing.
-    void downloads.restore();
+    // Resume downloads after first paint so they do not contend with Home.
+    scheduleIdle(() => {
+      void downloads.restore();
+    });
   }, [hydrate]);
 
   // Reader is full-bleed; chapter hub keeps a sticky action bar — hide tabs on both.
   const hideTabs =
     location.pathname.startsWith('/read/') || location.pathname.startsWith('/chapter/');
 
-  // Nothing renders until favourites and progress are read back from Dexie.
-  // The first IndexedDB open on a cold start can take longer than the first
-  // API response, and a route that renders before then would show an unstarred
-  // comic the user has favourited — worse, a tap in that window is silently
-  // undone the moment hydration lands and replaces the store.
-  if (!hydrated) {
-    return <BootScreen title="Starting app" subtitle="Opening local library…" />;
-  }
-
+  // Shell renders immediately. Hydration runs in the background; the journal
+  // protects favourites/progress taps that race the Dexie open.
   return (
     <div className="flex min-h-viewport flex-col bg-tg-bg text-tg-text">
       <main className="flex-1">
-        <Suspense fallback={<Spinner label="Loading reader" />}>
+        <Suspense fallback={<Spinner label="Loading…" />}>
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/search" element={<SearchPage />} />

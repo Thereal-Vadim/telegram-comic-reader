@@ -153,9 +153,14 @@ export class TextureManager {
       // Decoding on a worker thread is the difference between a dropped frame
       // and a smooth turn: a 1080p JPEG takes 15-30 ms to decode, which is two
       // frames at 60 Hz if it happens on the main thread.
+      //
+      // WebGL ignores UNPACK_FLIP_Y_WEBGL for ImageBitmap, so texture.flipY has
+      // no effect. Flip at bitmap creation instead (Three.js ImageBitmapLoader
+      // contract), otherwise every page renders upside-down.
       bitmap = await createImageBitmap(blob, {
         colorSpaceConversion: 'none',
         premultiplyAlpha: 'none',
+        imageOrientation: 'flipY',
       });
 
       if (signal.aborted || this.#disposed) {
@@ -170,7 +175,7 @@ export class TextureManager {
       texture.generateMipmaps = false;
       texture.wrapS = ClampToEdgeWrapping;
       texture.wrapT = ClampToEdgeWrapping;
-      texture.flipY = true;
+      texture.flipY = false;
       texture.needsUpdate = true;
 
       // Measured before closing: a closed ImageBitmap reports width and height

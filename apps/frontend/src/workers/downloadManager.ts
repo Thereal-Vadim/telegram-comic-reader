@@ -217,4 +217,3 @@ export class DownloadManager {
 }
 
 export const downloads = new DownloadManager();
-export { StorageQuotaError };

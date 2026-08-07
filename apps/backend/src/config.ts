@@ -107,7 +107,9 @@ const RawConfig = z.object({
     .default('false')
     .transform((v) => v === 'true'),
 
-  RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(300),
+  // Comic detail grids fire many /preview calls; reading then needs /pages.
+  // 300/min was too tight once image GETs shared the same IP via the tunnel.
+  RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(2_000),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(60_000),
 });
 

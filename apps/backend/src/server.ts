@@ -93,9 +93,22 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
   await app.register(rateLimit, {
     max: cfg.rateLimitMax,
     timeWindow: cfg.rateLimitWindowMs,
-    // A chapter is a burst of image requests from one client, so the limiter
-    // has to be generous enough not to throttle ordinary reading.
-    allowList: () => false,
+    // Cloudflare quick tunnels and Vite's proxy make every Mini App request
+    // look like 127.0.0.1. Bucket by bearer token so one client's chapter-grid
+    // preview storm cannot lock out everyone (or their own Read/Download).
+    keyGenerator: (request) => {
+      const auth = request.headers.authorization;
+      if (typeof auth === 'string' && auth.startsWith('Bearer ') && auth.length > 20) {
+        return `bearer:${auth.slice(7, 47)}`;
+      }
+      return request.ip;
+    },
+    // Image proxy is high-volume (one GET per page) and already cached; health
+    // is for probes. Catalog/auth/pages stay under the numeric cap.
+    allowList: (request) => {
+      const path = request.url.split('?', 1)[0] ?? '';
+      return path === '/api/health' || path.startsWith('/api/image/');
+    },
   });
 
   app.setErrorHandler((error, request, reply) => {

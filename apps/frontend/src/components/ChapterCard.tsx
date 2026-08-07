@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Chapter } from '@comic/shared';
 import { api } from '../api/client';
+import { enqueuePreview } from '../lib/previewQueue';
 import { CoverImage } from './CoverImage';
 
 const previewCache = new Map<string, string | null>();
@@ -57,7 +58,7 @@ export function ChapterCard({
     let cancelled = false;
     void (async () => {
       try {
-        const preview = await api.chapterPreview(chapter.id);
+        const preview = await enqueuePreview(() => api.chapterPreview(chapter.id));
         if (cancelled) return;
         previewCache.set(chapter.id, preview.coverUrl);
         setCoverUrl(preview.coverUrl);

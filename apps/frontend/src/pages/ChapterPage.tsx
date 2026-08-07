@@ -100,6 +100,11 @@ export function ChapterPage(): React.JSX.Element {
     });
   }, [chapterId, task]);
 
+  // Warm the three.js chunk while the user is still on this hub.
+  useEffect(() => {
+    void import('./ReaderPage');
+  }, []);
+
   const openReader = useCallback(() => {
     impact('medium');
     const page = progress?.pageIndex ?? 0;

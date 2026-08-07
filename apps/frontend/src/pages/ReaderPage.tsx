@@ -7,7 +7,7 @@ import { getStoredPages, isChapterDownloaded } from '../db/storage';
 import { ReaderCanvas, type ReaderPage as CanvasPage } from '../reader/ReaderCanvas';
 import type { TextureStats } from '../reader/TextureManager';
 import { useLibrary } from '../store/library';
-import { useReaderSettings } from '../store/reader';
+import { PAPER_PRESETS, useReaderSettings } from '../store/reader';
 import { useBackButton, useHaptics } from '../telegram/hooks';
 
 /**
@@ -41,7 +41,12 @@ export function ReaderPage(): React.JSX.Element {
   const toggleChrome = useReaderSettings((s) => s.toggleChrome);
   const setChromeVisible = useReaderSettings((s) => s.setChromeVisible);
   const direction = useReaderSettings((s) => s.direction);
+  const setDirection = useReaderSettings((s) => s.setDirection);
   const paperColor = useReaderSettings((s) => s.paperColor);
+  const ambientColor = useReaderSettings((s) => s.ambientColor);
+  const pageDim = useReaderSettings((s) => s.pageDim);
+  const paperPreset = useReaderSettings((s) => s.paperPreset);
+  const setPaperPreset = useReaderSettings((s) => s.setPaperPreset);
   const showStats = useReaderSettings((s) => s.showStats);
 
   const recordProgress = useLibrary((s) => s.recordProgress);
@@ -152,6 +157,13 @@ export function ReaderPage(): React.JSX.Element {
     setChromeVisible(false);
   }, [setChromeVisible]);
 
+  // Auto-hide chrome after a short idle so overlays do not sit on the page.
+  useEffect(() => {
+    if (!chromeVisible) return;
+    const id = window.setTimeout(() => setChromeVisible(false), 2800);
+    return () => window.clearTimeout(id);
+  }, [chromeVisible, setChromeVisible, index]);
+
   const handleIndexChange = useCallback(
     (next: number) => {
       setIndex(next);
@@ -179,7 +191,10 @@ export function ReaderPage(): React.JSX.Element {
   }
 
   return (
-    <div className="relative h-viewport w-full overflow-hidden bg-tg-bg">
+    <div
+      className="relative h-viewport w-full overflow-hidden"
+      style={{ backgroundColor: ambientColor }}
+    >
       <ReaderCanvas
         pages={pages}
         index={clampedIndex}
@@ -189,44 +204,74 @@ export function ReaderPage(): React.JSX.Element {
         onZoomChange={handleZoomChange}
         rtl={direction === 'rtl'}
         paperColor={paperColor}
+        pageDim={pageDim}
         {...(showStats ? { onStats: setStats } : {})}
       />
 
-      {/* Top chrome: title + close. Uses Telegram theme tokens so a theme
-          change never remounts the WebGL canvas underneath. */}
+      {/* Top chrome: title + close. Soft gradient so overlays do not glare. */}
       <div
         className={`pointer-events-none absolute inset-x-0 top-0 pt-safe transition-opacity duration-200 ${
           chromeVisible ? 'opacity-100' : 'opacity-0'
         }`}
       >
-        <div className="pointer-events-auto flex items-center gap-3 bg-gradient-to-b from-tg-header-bg/95 to-transparent px-4 pb-6 pt-3">
+        <div className="pointer-events-auto flex items-center gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 pb-6 pt-3">
           <button
             type="button"
             onClick={() => {
               impact('light');
               void navigate(-1);
             }}
-            className="rounded-lg bg-tg-secondary-bg px-3 py-1.5 text-sm font-medium text-tg-link"
+            className="rounded-lg bg-black/40 px-3 py-1.5 text-sm font-medium text-white"
           >
             Close
           </button>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-tg-text">{title || 'Reading'}</p>
-            <p className="truncate text-[11px] text-tg-hint">
+            <p className="truncate text-sm font-semibold text-white">{title || 'Reading'}</p>
+            <p className="truncate text-[11px] text-white/70">
               {source === 'offline' ? 'Offline · double-tap to zoom' : 'Streaming · double-tap to zoom'}
             </p>
           </div>
         </div>
       </div>
 
-      {/* Bottom chrome: scrubber. Pointer-transparent when hidden so a tap
-          while fading still reaches the reader surface. */}
+      {/* Bottom chrome: scrubber + comfort controls. */}
       <div
         className={`pointer-events-none absolute inset-x-0 bottom-0 pb-safe transition-opacity duration-200 ${
           chromeVisible ? 'opacity-100' : 'opacity-0'
         }`}
       >
-        <div className="pointer-events-auto bg-gradient-to-t from-tg-header-bg/95 to-transparent px-4 pb-4 pt-8">
+        <div className="pointer-events-auto bg-gradient-to-t from-black/75 to-transparent px-4 pb-4 pt-8">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex gap-1.5">
+              {PAPER_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => {
+                    impact('soft');
+                    setPaperPreset(preset.id);
+                  }}
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-medium ${
+                    paperPreset === preset.id
+                      ? 'bg-white/90 text-black'
+                      : 'bg-white/15 text-white'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                impact('soft');
+                setDirection(direction === 'ltr' ? 'rtl' : 'ltr');
+              }}
+              className="rounded-lg bg-white/15 px-2.5 py-1 text-[11px] font-medium text-white"
+            >
+              {direction === 'ltr' ? 'LTR' : 'RTL'}
+            </button>
+          </div>
           <input
             type="range"
             min={0}
@@ -239,8 +284,8 @@ export function ReaderPage(): React.JSX.Element {
             // direction pages actually advance.
             style={direction === 'rtl' ? { transform: 'scaleX(-1)' } : undefined}
           />
-          <div className="mt-1 flex items-center justify-between text-xs text-tg-hint">
-            <span className="tabular-nums text-tg-text">
+          <div className="mt-1 flex items-center justify-between text-xs text-white/70">
+            <span className="tabular-nums text-white">
               {clampedIndex + 1} / {pages.length}
             </span>
             <span>{source === 'offline' ? 'Offline copy' : 'Streaming'}</span>

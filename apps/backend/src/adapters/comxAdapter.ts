@@ -157,9 +157,22 @@ export class ComxAdapter implements ProviderAdapter {
   readonly #baseUrl = COMX_BASE_URL;
   readonly #session: ComxSession | null;
   readonly #fetch: GuardedFetch | null;
-  /** Short-lived detail cache so chapter/page routes do not re-scrape every time. */
+  /** Parsed comic detail (title, chapters). Longer TTL — lists change slowly. */
   readonly #detailCache = new Map<string, { value: ComicDetails; expiresAt: number }>();
-  static readonly #DETAIL_TTL_MS = 5 * 60_000;
+  /** Popular / browse catalog pages. ~3 refreshes per day. */
+  readonly #catalogCache = new Map<string, { value: CatalogResponse; expiresAt: number }>();
+  /** Search result pages. */
+  readonly #searchCache = new Map<string, { value: CatalogResponse; expiresAt: number }>();
+  /** Chapter page URL lists for reader + previews. */
+  readonly #pagesCache = new Map<string, { value: ChapterPagesResponse; expiresAt: number }>();
+  /** In-flight scrapes so concurrent clients share one upstream hit. */
+  readonly #inflight = new Map<string, Promise<unknown>>();
+
+  static readonly #DETAIL_TTL_MS = 2 * 60 * 60_000;
+  static readonly #CATALOG_TTL_MS = 8 * 60 * 60_000;
+  static readonly #SEARCH_TTL_MS = 30 * 60_000;
+  static readonly #PAGES_TTL_MS = 60 * 60_000;
+  static readonly #CACHE_MAX_ENTRIES = 256;
 
   constructor(fetchOrOpts: GuardedFetch | ComxAdapterOptions) {
     if (typeof fetchOrOpts === 'function') {
@@ -316,7 +329,57 @@ export class ComxAdapter implements ProviderAdapter {
   /**
    * Site search via DLE POST form (GET search URLs are unreliable).
    */
+  #readCache<T>(
+    map: Map<string, { value: T; expiresAt: number }>,
+    key: string,
+  ): T | undefined {
+    const hit = map.get(key);
+    if (!hit) return undefined;
+    if (hit.expiresAt <= Date.now()) {
+      map.delete(key);
+      return undefined;
+    }
+    return hit.value;
+  }
+
+  #writeCache<T>(
+    map: Map<string, { value: T; expiresAt: number }>,
+    key: string,
+    value: T,
+    ttlMs: number,
+  ): void {
+    map.set(key, { value, expiresAt: Date.now() + ttlMs });
+    if (map.size <= ComxAdapter.#CACHE_MAX_ENTRIES) return;
+    // Drop the oldest insertion order entry (Map iterates in insert order).
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+
+  async #withInflight<T>(key: string, load: () => Promise<T>): Promise<T> {
+    const existing = this.#inflight.get(key);
+    if (existing) return existing as Promise<T>;
+    const pending = load().finally(() => {
+      this.#inflight.delete(key);
+    });
+    this.#inflight.set(key, pending);
+    return pending;
+  }
+
   async searchCatalog(query: string, page = 1): Promise<CatalogResponse> {
+    const cacheKey = `${query.trim().toLowerCase()}|${page}`;
+    const cached = this.#readCache(this.#searchCache, cacheKey);
+    if (cached) return cached;
+
+    return this.#withInflight(`search:${cacheKey}`, async () => {
+      const fresh = this.#readCache(this.#searchCache, cacheKey);
+      if (fresh) return fresh;
+      const result = await this.#searchCatalogUncached(query, page);
+      this.#writeCache(this.#searchCache, cacheKey, result, ComxAdapter.#SEARCH_TTL_MS);
+      return result;
+    });
+  }
+
+  async #searchCatalogUncached(query: string, page = 1): Promise<CatalogResponse> {
     const searchUrl = `${this.#baseUrl}/index.php?do=search`;
     const formData = new URLSearchParams({
       do: 'search',
@@ -339,21 +402,32 @@ export class ComxAdapter implements ProviderAdapter {
   }
 
   async getCatalog(page = 1, categoryUrl?: string): Promise<CatalogResponse> {
-    const targetUrl = this.getCatalogUrl(page, categoryUrl);
-    try {
-      const html = await this.#fetchHtml(targetUrl);
-      return this.parseCatalogPage(html, page);
-    } catch (err) {
-      if (err instanceof AppError) {
-        // Preserve the exact upstream wording the Mini App already surfaces.
-        if (err.message.startsWith('comx is unavailable:')) throw err;
-        if (err.message.startsWith('upstream responded')) {
-          throw new AppError('UPSTREAM_UNAVAILABLE', `comx is unavailable: ${err.message}`);
+    const cacheKey = `${page}|${categoryUrl ?? ''}`;
+    const cached = this.#readCache(this.#catalogCache, cacheKey);
+    if (cached) return cached;
+
+    return this.#withInflight(`catalog:${cacheKey}`, async () => {
+      const fresh = this.#readCache(this.#catalogCache, cacheKey);
+      if (fresh) return fresh;
+
+      const targetUrl = this.getCatalogUrl(page, categoryUrl);
+      try {
+        const html = await this.#fetchHtml(targetUrl);
+        const result = this.parseCatalogPage(html, page);
+        this.#writeCache(this.#catalogCache, cacheKey, result, ComxAdapter.#CATALOG_TTL_MS);
+        return result;
+      } catch (err) {
+        if (err instanceof AppError) {
+          // Preserve the exact upstream wording the Mini App already surfaces.
+          if (err.message.startsWith('comx is unavailable:')) throw err;
+          if (err.message.startsWith('upstream responded')) {
+            throw new AppError('UPSTREAM_UNAVAILABLE', `comx is unavailable: ${err.message}`);
+          }
+          throw err;
         }
-        throw err;
+        throw new AppError('UPSTREAM_UNAVAILABLE', `comx is unavailable: ${String(err)}`);
       }
-      throw new AppError('UPSTREAM_UNAVAILABLE', `comx is unavailable: ${String(err)}`);
-    }
+    });
   }
 
   parseCatalogPage(html: string, page: number): CatalogResponse {
@@ -636,6 +710,19 @@ export class ComxAdapter implements ProviderAdapter {
 
   async getChapterPages(chapterUrlOrPath: string): Promise<ChapterPagesResponse> {
     const fullUrl = this.fixUrl(chapterUrlOrPath);
+    const cached = this.#readCache(this.#pagesCache, fullUrl);
+    if (cached) return cached;
+
+    return this.#withInflight(`pages:${fullUrl}`, async () => {
+      const fresh = this.#readCache(this.#pagesCache, fullUrl);
+      if (fresh) return fresh;
+      const result = await this.#scrapeChapterPages(fullUrl);
+      this.#writeCache(this.#pagesCache, fullUrl, result, ComxAdapter.#PAGES_TTL_MS);
+      return result;
+    });
+  }
+
+  async #scrapeChapterPages(fullUrl: string): Promise<ChapterPagesResponse> {
     const html = await this.#fetchHtml(fullUrl);
     const $ = cheerio.load(html);
 

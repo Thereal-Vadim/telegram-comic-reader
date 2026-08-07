@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
+import { Canvas, invalidate, useThree } from '@react-three/fiber';
 import type { Texture, WebGLRenderer } from 'three';
 import { ZOOM_TEXTURE_THRESHOLD } from './gestureMath';
 import { FlipScene } from './FlipScene';
+import type { PageLayout } from './pageCurlMath';
 import { TextureManager, type TextureSource } from './TextureManager';
 import { useFlipGesture, type TurnDirection } from './useFlipGesture';
 
@@ -43,6 +44,8 @@ export interface ReaderCanvasProps {
   /** Right-to-left reading order. */
   rtl?: boolean;
   paperColor?: string;
+  /** Dim bright page scans for night / eye comfort (1 = full). */
+  pageDim?: number;
   /** Surfaces GPU budget numbers to a debug overlay. */
   onStats?: (stats: ReturnType<TextureManager['stats']>) => void;
 }
@@ -103,6 +106,7 @@ export function ReaderCanvas({
   onZoomChange,
   rtl = false,
   paperColor = '#f8f5ef',
+  pageDim = 1,
   onStats,
 }: ReaderCanvasProps): React.JSX.Element {
   /*
@@ -138,6 +142,13 @@ export function ReaderCanvas({
   const [generation, setGeneration] = useState(0);
   const reducedMotion = usePrefersReducedMotion();
   const zoomedRef = useRef(false);
+  /** Shared page letterbox — FlipScene writes, gestures raycast through it. */
+  const layoutRef = useRef<PageLayout>({
+    pageWidth: 1,
+    pageHeight: 1,
+    viewWidth: 1,
+    viewHeight: 1,
+  });
 
   // Guards against a late texture load writing into state after the index has
   // moved on, which would briefly show the wrong page.
@@ -164,14 +175,39 @@ export function ReaderCanvas({
   );
 
   const { state: gesture, bind, startTurn, resetZoom } = useFlipGesture({
-    onCommit: () => undefined, // the scene commits once the spring settles
+    onCommit: () => undefined, // the scene commits once the paper lerp settles
     onTapCentre,
     ...(onThresholdCrossed ? { onThresholdCrossed } : {}),
     onScaleChange: handleScaleChange,
     canTurn,
+    layoutRef,
     rtl,
     reducedMotion,
   });
+
+  // Gesture handlers mutate a ref; with frameloop="demand" we must request a
+  // redraw after every pointer event or the sheet would never move.
+  const interactiveBind = useMemo(
+    () => ({
+      onPointerDown: (e: React.PointerEvent) => {
+        bind.onPointerDown(e);
+        invalidate();
+      },
+      onPointerMove: (e: React.PointerEvent) => {
+        bind.onPointerMove(e);
+        invalidate();
+      },
+      onPointerUp: (e: React.PointerEvent) => {
+        bind.onPointerUp(e);
+        invalidate();
+      },
+      onPointerCancel: (e: React.PointerEvent) => {
+        bind.onPointerCancel(e);
+        invalidate();
+      },
+    }),
+    [bind],
+  );
 
   /* Acquire the three-page window whenever the index moves. */
   useEffect(() => {
@@ -336,18 +372,26 @@ export function ReaderCanvas({
   return (
     <div
       className="reader-surface relative h-full w-full"
-      {...bind}
+      {...interactiveBind}
       role="application"
       aria-label="Comic reader"
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === 'ArrowRight' || e.key === 'PageDown') startTurn(rtl ? 'prev' : 'next');
-        if (e.key === 'ArrowLeft' || e.key === 'PageUp') startTurn(rtl ? 'next' : 'prev');
+        if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+          startTurn(rtl ? 'prev' : 'next');
+          invalidate();
+        }
+        if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+          startTurn(rtl ? 'next' : 'prev');
+          invalidate();
+        }
       }}
     >
       <Canvas
-        orthographic
-        camera={{ position: [0, 0, 10], zoom: 1, near: 0.1, far: 100 }}
+        // Perspective matches the reference demo so cylinder lift has foreshortening.
+        // Idle pages do not burn GPU; FlipScene / gestures call invalidate().
+        frameloop="demand"
+        camera={{ position: [0, 0, 4.8], fov: 30, near: 0.1, far: 100, zoom: 1 }}
         // Capped at 2: a 3x device pixel ratio triples fragment work for a
         // difference nobody can see on a phone-sized comic page.
         dpr={[1, 2]}
@@ -364,14 +408,17 @@ export function ReaderCanvas({
         <RendererBridge manager={manager} onContextRestored={handleContextRestored} />
         <FlipScene
           gesture={gesture}
+          layoutRef={layoutRef}
           currentTexture={textures.current}
           currentZoomTexture={zoomTexture}
           nextTexture={textures.next}
           prevTexture={textures.prev}
           aspect={aspect}
           paperColor={paperColor}
+          pageDim={pageDim}
           onTurnComplete={handleTurnComplete}
           reducedMotion={reducedMotion}
+          rtl={rtl}
         />
       </Canvas>
     </div>

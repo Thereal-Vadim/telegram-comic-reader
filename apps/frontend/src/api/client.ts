@@ -42,16 +42,6 @@ export class ApiClientError extends Error {
     this.retryAfterMs = retryAfterMs;
   }
 
-  /** True when retrying the identical request could plausibly succeed. */
-  get retryable(): boolean {
-    return (
-      this.code === 'NETWORK' ||
-      this.code === 'OFFLINE' ||
-      this.code === 'RATE_LIMITED' ||
-      this.code === 'UPSTREAM_UNAVAILABLE' ||
-      this.status >= 500
-    );
-  }
 }
 
 const TOKEN_STORAGE_KEY = 'comic.session';

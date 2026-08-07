@@ -47,52 +47,6 @@ export function useBackButton(onBack: (() => void) | null): void {
   }, [bound]);
 }
 
-export interface MainButtonConfig {
-  text: string;
-  onClick: () => void;
-  visible?: boolean;
-  enabled?: boolean;
-  progress?: boolean;
-}
-
-/** Drive the native main button from component state. */
-export function useMainButton(config: MainButtonConfig | null): void {
-  const handler = useRef<(() => void) | null>(config?.onClick ?? null);
-  useEffect(() => {
-    handler.current = config?.onClick ?? null;
-  });
-
-  const bound = config !== null;
-  const visible = config?.visible ?? true;
-  const enabled = config?.enabled ?? true;
-  const progress = config?.progress ?? false;
-  const text = config?.text ?? '';
-
-  useEffect(() => {
-    const tg = getWebApp();
-    const cb = (): void => handler.current?.();
-    tg.MainButton.onClick(cb);
-    return () => {
-      tg.MainButton.offClick(cb);
-      tg.MainButton.hide();
-    };
-  }, []);
-
-  useEffect(() => {
-    const tg = getWebApp();
-    if (!bound || !visible) {
-      tg.MainButton.hide();
-      return;
-    }
-    tg.MainButton.setText(text);
-    if (enabled) tg.MainButton.enable();
-    else tg.MainButton.disable();
-    if (progress) tg.MainButton.showProgress(true);
-    else tg.MainButton.hideProgress();
-    tg.MainButton.show();
-  }, [bound, text, visible, enabled, progress]);
-}
-
 /**
  * Haptics, rate-limited.
  *

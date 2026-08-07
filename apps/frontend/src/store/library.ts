@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import type { ComicSummary } from '@comic/shared';
 import { db, type Favorite, type ReadingProgress } from '../db/schema';
 import { withQuotaHandling } from '../db/storage';
 import {
@@ -218,9 +217,3 @@ async function flushJournal(journal: Journal): Promise<void> {
   }
 }
 
-/** Cache a comic's metadata so the library grid renders offline. */
-export async function cacheComicSummary(comic: ComicSummary): Promise<void> {
-  await withQuotaHandling(() => db.comics.put({ ...comic, cachedAt: Date.now() })).catch(
-    (err: unknown) => console.warn('[library] could not cache comic metadata', err),
-  );
-}
