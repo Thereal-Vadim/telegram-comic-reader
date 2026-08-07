@@ -177,7 +177,7 @@ export function ReaderSettingsSheet({
                     setPaperPreset(preset.id as PaperPresetId);
                   }}
                   className={`flex flex-col items-start rounded-2xl px-3 py-3 text-left transition-shadow ${
-                    selected ? 'ring-[3px] ring-[#1c1c1e]' : 'ring-1 ring-black/8'
+                    selected ? 'ring-[3px] ring-[#1c1c1e]' : 'ring-1 ring-black/10'
                   }`}
                   style={{ backgroundColor: preset.paperColor }}
                 >
