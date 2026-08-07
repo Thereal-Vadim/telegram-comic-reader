@@ -56,7 +56,11 @@ export default defineConfig({
       command: 'pnpm --filter @comic/backend dev',
       port: BACKEND_PORT,
       cwd: path.resolve(here, '../..'),
-      reuseExistingServer: !process.env['CI'],
+      // Never reuse. A server left over from an earlier session is running
+      // earlier code, and in the frontend's case it may be the dev server,
+      // which has no service worker at all — so the offline tests would pass
+      // or fail on something other than the build under test.
+      reuseExistingServer: false,
       timeout: 60_000,
       env: {
         PORT: String(BACKEND_PORT),
@@ -74,7 +78,7 @@ export default defineConfig({
       command: `pnpm exec vite build && pnpm exec vite preview --port ${FRONTEND_PORT} --strictPort`,
       port: FRONTEND_PORT,
       cwd: here,
-      reuseExistingServer: !process.env['CI'],
+      reuseExistingServer: false,
       timeout: 180_000,
       env: { VITE_API_BASE: `http://localhost:${BACKEND_PORT}` },
     },
