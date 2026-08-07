@@ -22,7 +22,6 @@ const MAX_ENTRIES = 40;
 const entries: BootEntry[] = [];
 const listeners = new Set<Listener>();
 let nextId = 1;
-let currentStage = 'starting';
 
 function emit(): void {
   const snapshot = entries.slice();
@@ -53,7 +52,6 @@ export function bootStage(
   detail?: string,
   level: BootLevel = 'info',
 ): void {
-  currentStage = stage;
   entries.push({
     id: nextId++,
     at: Date.now(),
@@ -79,10 +77,6 @@ export function bootError(stage: string, detail?: string): void {
 
 export function getBootEntries(): readonly BootEntry[] {
   return entries;
-}
-
-export function getCurrentBootStage(): string {
-  return currentStage;
 }
 
 export function subscribeBootLog(listener: Listener): () => void {

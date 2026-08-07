@@ -10,6 +10,8 @@ import { useLibrary } from '../store/library';
 import { useHaptics } from '../telegram/hooks';
 import { db } from '../db/schema';
 
+const SHELF_VISIBLE = 14;
+
 /**
  * The home feed: a hero row across the top and one shelf per content source.
  *
@@ -22,7 +24,6 @@ export function HomePage(): React.JSX.Element {
   const [loading, setLoading] = useState(true);
   const [offlineFallback, setOfflineFallback] = useState(false);
 
-  const hydrate = useLibrary((s) => s.hydrate);
   const favorites = useLibrary((s) => s.favorites);
 
   const load = useCallback(async () => {
@@ -34,15 +35,20 @@ export function HomePage(): React.JSX.Element {
       const response = await api.home();
       setFeed(response);
 
-      // Cache summaries so the offline path below has something to show.
-      await db.comics
-        .bulkPut(
-          [...response.hero, ...response.shelves.flatMap((s) => s.items)].map((c) => ({
-            ...c,
-            cachedAt: Date.now(),
-          })),
-        )
-        .catch(() => undefined);
+      // Persist summaries off the critical path so Home can paint first.
+      const toCache = [...response.hero, ...response.shelves.flatMap((s) => s.items)].map(
+        (c) => ({ ...c, cachedAt: Date.now() }),
+      );
+      const writeCache = (): void => {
+        void db.comics.bulkPut(toCache).catch(() => undefined);
+      };
+      const ric = (
+        window as Window & {
+          requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+        }
+      ).requestIdleCallback;
+      if (typeof ric === 'function') ric(writeCache, { timeout: 2500 });
+      else window.setTimeout(writeCache, 100);
     } catch (err) {
       // Before surfacing the error, see whether we can serve from cache.
       bootStage('home-ui', 'Home failed — checking offline cache');
@@ -64,8 +70,8 @@ export function HomePage(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
-    void hydrate();
     // Paint last IndexedDB shelf immediately, then refresh from the API.
+    // App.tsx already hydrates favourites — no second Dexie pass here.
     let cancelled = false;
     void (async () => {
       const cached = await db.comics.orderBy('cachedAt').reverse().limit(40).toArray();
@@ -83,7 +89,7 @@ export function HomePage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [hydrate, load]);
+  }, [load]);
 
   if (loading && !feed) {
     return <BootScreen title="Loading library" subtitle="Fetching popular comics…" />;
@@ -142,10 +148,11 @@ export function HomePage(): React.JSX.Element {
 function HeroCarousel({ items }: { items: ComicSummary[] }): React.JSX.Element {
   const navigate = useNavigate();
   const { select } = useHaptics();
+  const visible = items.slice(0, 8);
 
   return (
     <div className="no-scrollbar mt-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4">
-      {items.map((comic, i) => (
+      {visible.map((comic, i) => (
         <button
           key={comic.id}
           type="button"
@@ -175,6 +182,7 @@ function HeroCarousel({ items }: { items: ComicSummary[] }): React.JSX.Element {
 }
 
 function Shelf({ title, items }: { title: string; items: ComicSummary[] }): React.JSX.Element {
+  const visible = items.slice(0, SHELF_VISIBLE);
   return (
     <section className="mt-6">
       <div className="mb-2 flex items-baseline justify-between px-4">
@@ -183,7 +191,7 @@ function Shelf({ title, items }: { title: string; items: ComicSummary[] }): Reac
       </div>
 
       <div className="no-scrollbar flex gap-3 overflow-x-auto px-4">
-        {items.map((comic) => (
+        {visible.map((comic) => (
           <Link
             key={comic.id}
             to={`/comic/${encodeURIComponent(comic.id)}`}

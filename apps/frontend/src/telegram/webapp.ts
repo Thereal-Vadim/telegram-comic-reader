@@ -10,11 +10,6 @@ import type { TelegramWebApp, ThemeParams } from './types';
  * and haptics are no-ops.
  */
 
-/** True only when the real Telegram bridge is present. */
-export function isTelegramEnvironment(): boolean {
-  return typeof window !== 'undefined' && window.Telegram?.WebApp?.initData !== undefined;
-}
-
 /** Default palette for the browser fallback, matching Telegram's dark theme. */
 const FALLBACK_THEME: ThemeParams = {
   bg_color: '#17212b',

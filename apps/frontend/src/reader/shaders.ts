@@ -82,6 +82,7 @@ uniform float uHasFront;
 uniform float uHasBack;
 uniform vec3 uPaperColor;
 uniform float uOpacity;
+uniform float uPageDim; // <1 softens bright scans for night / eye comfort
 
 varying vec2 vUv;
 varying float vShade;
@@ -100,20 +101,8 @@ void main() {
     color = mix(vec4(uPaperColor, 1.0), texture2D(uBack, backUv), uHasBack);
   }
 
-  gl_FragColor = vec4(color.rgb * vShade, color.a * uOpacity);
+  gl_FragColor = vec4(color.rgb * vShade * uPageDim, color.a * uOpacity);
 }
 `;
 
 /** Uniform names, centralised so a typo fails at import rather than silently. */
-export const PAGE_UNIFORMS = {
-  progress: 'uProgress',
-  width: 'uWidth',
-  bowAmount: 'uBowAmount',
-  turnSign: 'uTurnSign',
-  front: 'uFront',
-  back: 'uBack',
-  hasFront: 'uHasFront',
-  hasBack: 'uHasBack',
-  paperColor: 'uPaperColor',
-  opacity: 'uOpacity',
-} as const;

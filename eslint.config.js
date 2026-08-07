@@ -72,7 +72,6 @@ export default tseslint.config(
     // writes as React state bugs; they are not.
     files: [
       'apps/frontend/src/reader/FlipScene.tsx',
-      'apps/frontend/src/reader/PageMesh.tsx',
       'apps/frontend/src/reader/ReaderCanvas.tsx',
     ],
     rules: {

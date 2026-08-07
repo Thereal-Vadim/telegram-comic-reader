@@ -72,6 +72,9 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    include: ['three', '@react-three/fiber', 'dexie', 'zustand'],
+  },
   build: {
     target: 'es2022',
     // Telegram's Android WebView is often a few Chrome versions behind the
@@ -83,6 +86,10 @@ export default defineConfig({
         // split into its own chunk to keep the catalog's first paint fast.
         manualChunks(id) {
           if (id.includes('node_modules/three') || id.includes('@react-three')) return 'three';
+          if (id.includes('node_modules/react-dom') || id.includes('node_modules/react/')) {
+            return 'react';
+          }
+          if (id.includes('node_modules/dexie')) return 'dexie';
           return undefined;
         },
       },

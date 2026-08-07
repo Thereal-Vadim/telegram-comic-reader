@@ -73,6 +73,24 @@
       var stageEl = document.getElementById('boot-splash-stage');
       stageEl.textContent = 'Loading JavaScript bundle…';
 
+      // Match Telegram theme before the JS bundle paints (avoids dark flash).
+      try {
+        var tp = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.themeParams;
+        var splash = document.getElementById('boot-splash');
+        if (tp && splash) {
+          if (tp.bg_color) splash.style.background = tp.bg_color;
+          if (tp.text_color) splash.style.color = tp.text_color;
+          if (tp.hint_color) stageEl.style.color = tp.hint_color;
+          if (tp.button_color) {
+            var spinner = splash.querySelector('div');
+            if (spinner) {
+              spinner.style.borderColor = tp.hint_color || '#708499';
+              spinner.style.borderTopColor = tp.button_color;
+            }
+          }
+        }
+      } catch (e) {}
+
       function showBootFailure(message) {
         stageEl.style.color = '#ec3942';
         stageEl.textContent = message;

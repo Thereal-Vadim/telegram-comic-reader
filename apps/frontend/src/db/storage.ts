@@ -1,5 +1,5 @@
 import Dexie from 'dexie';
-import { db, type StoredChapter, type StoredComic, type StoredPage } from './schema';
+import { db, type StoredPage } from './schema';
 
 /**
  * Storage accounting and eviction.
@@ -222,10 +222,3 @@ export async function getStoredPages(chapterId: string): Promise<StoredPage[]> {
     .toArray();
 }
 
-export async function cacheComic(comic: StoredComic): Promise<void> {
-  await withQuotaHandling(() => db.comics.put({ ...comic, cachedAt: Date.now() }));
-}
-
-export async function cacheChapters(chapters: StoredChapter[]): Promise<void> {
-  await withQuotaHandling(() => db.chapters.bulkPut(chapters));
-}

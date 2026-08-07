@@ -31,13 +31,15 @@ export interface FlipSceneProps {
   /** Page aspect ratio (width / height), used to letterbox correctly. */
   aspect: number;
   paperColor: string;
+  /** Multiplier for page textures (night mode dims bright scans). */
+  pageDim?: number;
   /** Called once a turn has fully settled and the index should advance. */
   onTurnComplete: (direction: TurnDirection) => void;
   /** Cross-fade instead of rotating, for prefers-reduced-motion. */
   reducedMotion: boolean;
 }
 
-function createPageMaterial(paperColor: string): ShaderMaterial {
+function createPageMaterial(paperColor: string, pageDim: number): ShaderMaterial {
   return new ShaderMaterial({
     vertexShader: pageVertexShader,
     fragmentShader: pageFragmentShader,
@@ -54,6 +56,7 @@ function createPageMaterial(paperColor: string): ShaderMaterial {
       uHasBack: { value: 0 },
       uPaperColor: { value: new Color(paperColor) },
       uOpacity: { value: 1 },
+      uPageDim: { value: pageDim },
     },
   });
 }
@@ -66,10 +69,11 @@ export function FlipScene({
   prevTexture,
   aspect,
   paperColor,
+  pageDim = 1,
   onTurnComplete,
   reducedMotion,
 }: FlipSceneProps): React.JSX.Element {
-  const { viewport, camera } = useThree();
+  const { viewport, camera, invalidate } = useThree();
 
   // Fit the page inside the viewport without distorting it. The page is sized
   // in world units so that a 1:1 pixel mapping holds at the camera distance,
@@ -84,11 +88,11 @@ export function FlipScene({
   }, [viewport.width, viewport.height, aspect]);
 
   const geometry = useMemo(
-    () => new PlaneGeometry(pageWidth, pageHeight, 48, 1),
+    () => new PlaneGeometry(pageWidth, pageHeight, 32, 1),
     [pageWidth, pageHeight],
   );
-  const sheetMaterial = useMemo(() => createPageMaterial(paperColor), []);
-  const baseMaterial = useMemo(() => createPageMaterial(paperColor), []);
+  const sheetMaterial = useMemo(() => createPageMaterial(paperColor, pageDim), []);
+  const baseMaterial = useMemo(() => createPageMaterial(paperColor, pageDim), []);
 
   // Spring velocity persists across frames but is never read by React.
   const velocity = useRef(0);
@@ -101,7 +105,15 @@ export function FlipScene({
   useEffect(() => {
     (sheetMaterial.uniforms['uPaperColor']!.value as Color).set(paperColor);
     (baseMaterial.uniforms['uPaperColor']!.value as Color).set(paperColor);
-  }, [paperColor, sheetMaterial, baseMaterial]);
+    sheetMaterial.uniforms['uPageDim']!.value = pageDim;
+    baseMaterial.uniforms['uPageDim']!.value = pageDim;
+    invalidate();
+  }, [paperColor, pageDim, sheetMaterial, baseMaterial, invalidate]);
+
+  // Redraw when textures arrive under frameloop="demand".
+  useEffect(() => {
+    invalidate();
+  }, [currentTexture, currentZoomTexture, nextTexture, prevTexture, invalidate]);
 
   // Free the per-scene GPU objects. Textures belong to the TextureManager and
   // are deliberately left alone.
@@ -195,6 +207,17 @@ export function FlipScene({
       baseMaterial.uniforms['uHasFront']!.value = destination ? 1 : 0;
       onTurnComplete(direction);
     }
+
+    // Keep animating only while the sheet or camera is still moving.
+    const busy =
+      state.dragging ||
+      state.settling ||
+      Math.abs(state.progress) > 0.0005 ||
+      Math.abs(velocity.current) > 0.01 ||
+      Math.abs(state.scale - 1) > 0.001 ||
+      Math.abs(state.panX) > 0.5 ||
+      Math.abs(state.panY) > 0.5;
+    if (busy) invalidate();
   });
 
   return (

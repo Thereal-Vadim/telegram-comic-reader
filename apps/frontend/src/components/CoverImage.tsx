@@ -19,6 +19,27 @@ export interface CoverImageProps {
   eager?: boolean;
 }
 
+function findScrollParent(el: HTMLElement | null): Element | null {
+  let node = el?.parentElement ?? null;
+  while (node) {
+    const style = window.getComputedStyle(node);
+    const ox = style.overflowX;
+    const oy = style.overflowY;
+    if (
+      ox === 'auto' ||
+      ox === 'scroll' ||
+      oy === 'auto' ||
+      oy === 'scroll' ||
+      style.overflow === 'auto' ||
+      style.overflow === 'scroll'
+    ) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
 export function CoverImage({
   src,
   alt,
@@ -40,6 +61,7 @@ export function CoverImage({
       return;
     }
 
+    const root = findScrollParent(ref.current);
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) {
@@ -48,8 +70,9 @@ export function CoverImage({
         }
       },
       // Start fetching a little before the cover scrolls in so it is decoded
-      // by the time it lands.
-      { rootMargin: '200px' },
+      // by the time it lands. Root is the horizontal shelf when present so
+      // off-screen cards in a long row stay unloaded.
+      { root, rootMargin: '80px' },
     );
 
     observer.observe(ref.current);
