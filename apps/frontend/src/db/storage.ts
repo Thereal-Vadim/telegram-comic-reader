@@ -185,6 +185,55 @@ export async function deleteComic(comicId: string): Promise<number> {
 }
 
 /**
+ * Titles from `apps/backend/scripts/make-sample-library.ts` — placeholder
+ * CBZ series used in local/e2e. When the server no longer exposes the `local`
+ * adapter, these linger in IndexedDB and keep showing on Home.
+ */
+export const DEMO_SAMPLE_TITLES = new Set([
+  'Orbital Mechanics',
+  'Signal Lost',
+  'The Cartographer',
+]);
+
+export function isDemoSampleComic(comic: { id: string; title: string }): boolean {
+  return DEMO_SAMPLE_TITLES.has(comic.title);
+}
+
+/**
+ * Drop cached `local:` catalog rows when that adapter is no longer on the
+ * home feed. Keeps comics that still have downloaded chapter pages so a
+ * real offline library is not wiped.
+ *
+ * Returns the purged comic ids so callers can sync in-memory library state.
+ */
+export async function purgeStaleLocalCatalog(opts: {
+  localAdapterLive: boolean;
+}): Promise<string[]> {
+  if (opts.localAdapterLive) return [];
+
+  const cached = await db.comics.toArray();
+  const candidates = cached.filter(
+    (c) => c.id.startsWith('local:') || DEMO_SAMPLE_TITLES.has(c.title),
+  );
+  if (candidates.length === 0) return [];
+
+  const purged: string[] = [];
+  for (const comic of candidates) {
+    const downloaded = await db.chapters
+      .where('comicId')
+      .equals(comic.id)
+      .filter((ch) => ch.downloadedAt != null)
+      .first();
+    if (downloaded) continue;
+
+    await deleteComic(comic.id);
+    await db.favorites.delete(comic.id).catch(() => undefined);
+    purged.push(comic.id);
+  }
+  return purged;
+}
+
+/**
  * Wrap a write so a quota failure becomes a typed error.
  *
  * Dexie surfaces the underlying DOMException, whose `name` is the only

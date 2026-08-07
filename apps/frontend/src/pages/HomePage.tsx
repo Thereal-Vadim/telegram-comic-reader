@@ -7,6 +7,7 @@ import { BootScreen } from '../components/BootScreen';
 import { CoverImage } from '../components/CoverImage';
 import { EmptyState, ErrorState } from '../components/states';
 import { db, type ReadingProgress, type StoredChapter } from '../db/schema';
+import { isDemoSampleComic, purgeStaleLocalCatalog } from '../db/storage';
 import { useLibrary } from '../store/library';
 import { useHaptics } from '../telegram/hooks';
 
@@ -44,11 +45,22 @@ export function HomePage(): React.JSX.Element {
 
     try {
       const response = await api.home();
-      setFeed(response);
+      const localAdapterLive = feedHasLocalAdapter(response);
+      // Demo CBZ titles only belong on Home when the local adapter is mounted
+      // (dev/e2e). Otherwise strip them so stale IndexedDB rows cannot resurface.
+      const live = localAdapterLive ? response : withoutDemoSamples(response);
+      setFeed(live);
 
-      const toCache = [...response.hero, ...response.shelves.flatMap((s) => s.items)].map(
-        (c) => ({ ...c, cachedAt: Date.now() }),
-      );
+      const purged = await purgeStaleLocalCatalog({ localAdapterLive }).catch(() => [] as string[]);
+      if (purged.length > 0) {
+        bootStage('home-ui', `Purged ${purged.length} local sample comics from cache`);
+        dropPurgedFromLibrary(purged);
+      }
+
+      const toCache = [...live.hero, ...live.shelves.flatMap((s) => s.items)].map((c) => ({
+        ...c,
+        cachedAt: Date.now(),
+      }));
       const writeCache = (): void => {
         void db.comics.bulkPut(toCache).catch(() => undefined);
       };
@@ -61,7 +73,7 @@ export function HomePage(): React.JSX.Element {
       else window.setTimeout(writeCache, 100);
     } catch (err) {
       bootStage('home-ui', 'Home failed — checking offline cache');
-      const cached = await db.comics.orderBy('cachedAt').reverse().limit(40).toArray();
+      const cached = await catalogCacheForUi(40);
       if (cached.length > 0) {
         bootWarn('home-ui', `Showing ${cached.length} cached comics offline`);
         setFeed({
@@ -81,7 +93,7 @@ export function HomePage(): React.JSX.Element {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const cached = await db.comics.orderBy('cachedAt').reverse().limit(40).toArray();
+      const cached = await catalogCacheForUi(40);
       if (cancelled || cached.length === 0) return;
       setFeed((prev) =>
         prev ?? {
@@ -128,9 +140,11 @@ export function HomePage(): React.JSX.Element {
 
   const catalogItems = useMemo(() => {
     if (!feed) return [] as ComicSummary[];
+    const hideDemos = !feedHasLocalAdapter(feed);
     const seen = new Set<string>();
     const items: ComicSummary[] = [];
     for (const comic of [...feed.hero, ...feed.shelves.flatMap((s) => s.items)]) {
+      if (hideDemos && isDemoSampleComic(comic)) continue;
       if (seen.has(comic.id)) continue;
       seen.add(comic.id);
       items.push(comic);
@@ -318,14 +332,63 @@ function CoverShelf({
   );
 }
 
+async function catalogCacheForUi(limit: number): Promise<ComicSummary[]> {
+  const cached = await db.comics.orderBy('cachedAt').reverse().limit(limit * 2).toArray();
+  // Prefer remote catalog rows so demo local stubs do not paint over com-x.
+  const remote = cached.filter((c) => !c.id.startsWith('local:') && !isDemoSampleComic(c));
+  const picked = remote.length > 0 ? remote : cached.filter((c) => !isDemoSampleComic(c));
+  return picked.slice(0, limit);
+}
+
+function feedHasLocalAdapter(feed: HomeFeedResponse): boolean {
+  return (
+    feed.shelves.some((s) => s.id === 'local') ||
+    feed.hero.some((c) => c.id.startsWith('local:'))
+  );
+}
+
+function withoutDemoSamples(feed: HomeFeedResponse): HomeFeedResponse {
+  return {
+    ...feed,
+    hero: feed.hero.filter((c) => !isDemoSampleComic(c)),
+    shelves: feed.shelves
+      .map((s) => ({ ...s, items: s.items.filter((c) => !isDemoSampleComic(c)) }))
+      .filter((s) => s.items.length > 0),
+  };
+}
+
+function dropPurgedFromLibrary(purgedIds: string[]): void {
+  const purged = new Set(purgedIds);
+  useLibrary.setState((s) => {
+    const favorites = new Set([...s.favorites].filter((id) => !purged.has(id)));
+    const progress = new Map(
+      [...s.progress.entries()].filter(([, row]) => !purged.has(row.comicId)),
+    );
+    const history = s.history.filter((id) => !purged.has(id));
+    return { favorites, progress, history };
+  });
+  void db.kv
+    .get('history')
+    .then(async (row) => {
+      if (!row || !Array.isArray(row.value)) return;
+      const next = (row.value as string[]).filter((id) => !purged.has(id));
+      await db.kv.put({ key: 'history', value: next });
+    })
+    .catch(() => undefined);
+}
+
 async function buildCatalogIndex(
   feed: HomeFeedResponse | null,
 ): Promise<Map<string, ComicSummary>> {
   const map = new Map<string, ComicSummary>();
-  const cached = await db.comics.orderBy('cachedAt').reverse().limit(200).toArray();
+  const hideDemos = !feed || !feedHasLocalAdapter(feed);
+  const cached = hideDemos
+    ? await catalogCacheForUi(200)
+    : (await db.comics.orderBy('cachedAt').reverse().limit(200).toArray());
   for (const comic of cached) map.set(comic.id, comic);
   if (feed) {
     for (const comic of [...feed.hero, ...feed.shelves.flatMap((s) => s.items)]) {
+      if (hideDemos && isDemoSampleComic(comic)) continue;
       map.set(comic.id, comic);
     }
   }
@@ -344,29 +407,19 @@ async function buildContinueItems(
     }
   }
 
-  const ranked = [...latestByComic.entries()]
-    .sort((a, b) => b[1].updatedAt - a[1].updatedAt)
-    .slice(0, 3);
+  const ranked = [...latestByComic.entries()].sort((a, b) => b[1].updatedAt - a[1].updatedAt);
 
   const rows: ContinueItem[] = [];
   for (const [comicId, prog] of ranked) {
+    if (rows.length >= 3) break;
+
     let comic = catalog.get(comicId);
     if (!comic) {
       const stored = await db.comics.get(comicId);
       if (stored) comic = stored;
     }
-    if (!comic) {
-      comic = {
-        id: comicId,
-        title: 'Comic',
-        coverUrl: null,
-        authors: [],
-        genres: [],
-        status: 'unknown',
-        year: null,
-        chapterCount: null,
-      };
-    }
+    // Hide procedural sample titles once the local library source is gone.
+    if (!comic || (isDemoSampleComic(comic) && comic.id.startsWith('local:'))) continue;
 
     const chapters = await db.chapters.where('comicId').equals(comicId).toArray();
     const percent = estimateComicPercent(prog, chapters, comic.chapterCount);
