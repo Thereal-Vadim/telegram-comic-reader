@@ -60,7 +60,7 @@ export interface SearchArgs {
 export interface ProviderAdapter {
   readonly id: string;
   readonly label: string;
-  readonly kind: 'local' | 'opds';
+  readonly kind: 'local' | 'opds' | 'comx';
 
   /**
    * Hostnames this adapter needs the image proxy to reach. Contributed to the

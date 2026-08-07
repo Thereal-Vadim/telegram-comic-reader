@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { AppError, ImageVariant } from '@comic/shared';
 import type { AdapterRegistry } from '../adapters/registry.js';
 import { LocalAdapter } from '../adapters/local.js';
+import { ComxAdapter } from '../adapters/comxAdapter.js';
 import { getTranscodedImage, type PipelineDeps } from '../images/pipeline.js';
 
 /**
@@ -53,11 +54,17 @@ export function registerImageRoutes(
           : source;
 
       const cacheRef = `${adapterId}\u0000${ref}`;
+      // com-x page images live on arbitrary CDNs; private ranges stay blocked.
+      const effectiveDeps =
+        adapter instanceof ComxAdapter
+          ? { ...deps, guard: { ...deps.guard, allowAnyPublicHost: true } }
+          : deps;
+
       const result = await getTranscodedImage(
         resolved,
         variant.data,
         cacheRef,
-        deps,
+        effectiveDeps,
         resolveFilePath,
       );
 

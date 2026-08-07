@@ -13,6 +13,7 @@ import {
 import type { Config } from '../config.js';
 import { LocalAdapter } from './local.js';
 import { OpdsAdapter, type GuardedFetch } from './opds.js';
+import { ComxAdapter } from './comxAdapter.js';
 import type { ImageSource, ProviderAdapter, SearchArgs } from './types.js';
 
 /**
@@ -244,12 +245,17 @@ export class AdapterRegistry {
 /**
  * Build the registry from operator configuration.
  *
- * Content only comes from what YOU configure: a folder of CBZ files
- * (`LOCAL_LIBRARY_DIR`) and/or OPDS catalogs (`OPDS_CATALOGS`). Nothing is
- * scraped from the public internet by default.
+ * Enable the sources you want: local CBZ folder, OPDS catalogs, and/or the
+ * com-x.life adapter (`COMX_ENABLED=true`). Nothing is on by default except
+ * what you set in env.
  */
-export function buildRegistry(cfg: Config, guardedFetch: GuardedFetch): AdapterRegistry {
+export function buildRegistry(
+  cfg: Config,
+  guardedFetch: GuardedFetch,
+  comxFetch: GuardedFetch = guardedFetch,
+): { registry: AdapterRegistry; comx: ComxAdapter | null } {
   const adapters: ProviderAdapter[] = [];
+  let comx: ComxAdapter | null = null;
 
   if (cfg.localLibraryDir) {
     adapters.push(new LocalAdapter(cfg.localLibraryDir, cfg.imageMaxSourceBytes));
@@ -259,8 +265,6 @@ export function buildRegistry(cfg: Config, guardedFetch: GuardedFetch): AdapterR
   for (const catalog of cfg.opdsCatalogs) {
     adapters.push(
       new OpdsAdapter(catalog, {
-        // Large acquisition downloads use the redirect-aware fetch from server.ts
-        // via a wrapper that raises the byte ceiling — see buildServer.
         fetch: guardedFetch,
         archiveDir,
         maxEntryBytes: cfg.imageMaxSourceBytes,
@@ -268,5 +272,10 @@ export function buildRegistry(cfg: Config, guardedFetch: GuardedFetch): AdapterR
     );
   }
 
-  return new AdapterRegistry(adapters, cfg.proxyExtraHosts);
+  if (cfg.comxEnabled) {
+    comx = new ComxAdapter(comxFetch);
+    adapters.push(comx);
+  }
+
+  return { registry: new AdapterRegistry(adapters, cfg.proxyExtraHosts), comx };
 }

@@ -82,6 +82,12 @@ export function SettingsPage(): React.JSX.Element {
             (user/pass optional). Works with Kavita, Komga, Calibre-Web, etc.
           </li>
           <li>
+            <span className="text-tg-text">com-x.life adapter</span>
+            <br />
+            Set <code className="text-tg-text">COMX_ENABLED=true</code> to browse that site’s
+            catalog, search, chapters and pages through the Mini App.
+          </li>
+          <li>
             Restart the backend. This screen and Home will list whatever those
             hooks expose — you choose the origin.
           </li>
@@ -100,7 +106,9 @@ function LibraryCard({ adapter }: { adapter: AdapterInfo }): React.JSX.Element {
       ? 'CBZ / ZIP files from LOCAL_LIBRARY_DIR on this server.'
       : adapter.kind === 'opds'
         ? 'OPDS catalog you configured (Kavita, Komga, Calibre-Web, …).'
-        : adapter.kind;
+        : adapter.kind === 'comx'
+          ? 'com-x.life catalog (COMX_ENABLED).'
+          : adapter.kind;
 
   return (
     <article className="rounded-xl bg-tg-secondary-bg px-4 py-3">

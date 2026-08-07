@@ -10,6 +10,7 @@ import { resolveSafeTarget, safeFetch, safeFetchFollowingRedirects, type GuardOp
 import { registerAuthRoutes, requireSession } from './routes/auth.js';
 import { registerCatalogRoutes } from './routes/catalog.js';
 import { registerImageRoutes } from './routes/image.js';
+import { registerComxRoutes } from './routes/comxRoutes.js';
 
 export interface BuiltServer {
   readonly app: FastifyInstance;
@@ -26,9 +27,8 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     // the operator piping through `pino-pretty`, which keeps the transport
     // dependency out of the production image.
     logger: { level: cfg.env === 'test' ? 'silent' : 'info' },
-    // Telegram ids and long base64url refs make for long URLs; the default
-    // 8 KB limit is generous but the ceiling is worth being explicit about.
-    maxParamLength: 2048,
+    // com-x image refs embed two URLs as base64url; keep headroom above 8 KB.
+    maxParamLength: 4096,
     bodyLimit: 64 * 1024,
   });
 
@@ -53,8 +53,7 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     });
   };
 
-  // OPDS acquisition: CBZ bodies are large and may 302 onto a CDN. Use a
-  // redirect-aware fetcher with the archive byte ceiling for those adapters.
+  // OPDS acquisition: CBZ bodies are large and may 302 onto a CDN.
   const opdsFetch = async (url: string, headers: Record<string, string> = {}) => {
     const accept = headers['accept'] ?? headers['Accept'] ?? '*/*';
     const wantsArchive =
@@ -70,7 +69,21 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     return guardedFetch(url, headers);
   };
 
-  const registry = buildRegistry(cfg, opdsFetch);
+  // com-x HTML + CDN images: any public host, private ranges still blocked.
+  const comxGuard: GuardOptions = {
+    allowedHosts: new Set<string>(),
+    allowPrivate: false,
+    allowAnyPublicHost: true,
+  };
+  const comxFetch = async (url: string, headers: Record<string, string> = {}) =>
+    safeFetchFollowingRedirects(url, comxGuard, {
+      headers,
+      timeoutMs: 30_000,
+      maxBytes: cfg.imageMaxSourceBytes,
+      accept: headers['accept'] ?? headers['Accept'] ?? '*/*',
+    });
+
+  const { registry, comx } = buildRegistry(cfg, opdsFetch, comxFetch);
   guardOptions = { allowedHosts: registry.proxyHosts, allowPrivate: cfg.allowPrivateUpstream };
 
   const cache = new ImageCache(cfg.imageCacheDir, cfg.imageCacheMaxBytes);
@@ -123,8 +136,9 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     cache: { entries: cache.entryCount, bytes: cache.totalBytes },
   }));
 
+  const sessionGuard = requireSession(cfg);
   registerAuthRoutes(app, cfg);
-  registerCatalogRoutes(app, registry, requireSession(cfg));
+  registerCatalogRoutes(app, registry, sessionGuard);
   registerImageRoutes(app, registry, {
     cache,
     quality: cfg.imageWebpQuality,
@@ -132,10 +146,14 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     guard: guardOptions,
   });
 
+  if (comx) {
+    registerComxRoutes(app, comx, sessionGuard);
+  }
+
   if (registry.size === 0) {
     app.log.warn(
-      'no content sources configured - set LOCAL_LIBRARY_DIR to a folder of CBZ files ' +
-        'or OPDS_CATALOGS to an OPDS server, then restart',
+      'no content sources configured — set LOCAL_LIBRARY_DIR, OPDS_CATALOGS, ' +
+        'and/or COMX_ENABLED=true, then restart',
     );
   } else {
     app.log.info(

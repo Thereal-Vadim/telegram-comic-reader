@@ -50,6 +50,15 @@ const RawConfig = z.object({
   OPDS_CATALOGS: z.string().default(''),
 
   /**
+   * Enable the com-x.life HTML adapter (catalog, search, chapters, pages).
+   * Off by default — turn on explicitly when you want that source.
+   */
+  COMX_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
+  /**
    * Ceiling for a whole CBZ download from an OPDS acquisition link (individual
    * pages stay under IMAGE_MAX_SOURCE_BYTES).
    */
@@ -149,6 +158,7 @@ export interface Config {
   readonly corsOrigins: string[] | true;
   readonly localLibraryDir: string | undefined;
   readonly opdsCatalogs: OpdsCatalogConfig[];
+  readonly comxEnabled: boolean;
   readonly archiveMaxBytes: number;
   readonly imageCacheDir: string;
   readonly imageCacheMaxBytes: number;
@@ -193,6 +203,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     corsOrigins: raw.CORS_ORIGINS === '*' ? true : csv(raw.CORS_ORIGINS),
     localLibraryDir: raw.LOCAL_LIBRARY_DIR ? path.resolve(raw.LOCAL_LIBRARY_DIR) : undefined,
     opdsCatalogs,
+    comxEnabled: raw.COMX_ENABLED,
     archiveMaxBytes: raw.ARCHIVE_MAX_BYTES,
     imageCacheDir: path.resolve(cacheDir),
     imageCacheMaxBytes: raw.IMAGE_CACHE_MAX_BYTES,
