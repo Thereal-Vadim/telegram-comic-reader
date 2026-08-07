@@ -21,6 +21,7 @@ const ReaderPage = lazy(() =>
 
 export function App(): React.JSX.Element {
   const hydrate = useLibrary((s) => s.hydrate);
+  const hydrated = useLibrary((s) => s.hydrated);
   const location = useLocation();
 
   useEffect(() => {
@@ -32,6 +33,19 @@ export function App(): React.JSX.Element {
   // The reader is full-bleed and supplies its own controls, so the tab bar is
   // hidden there rather than overlapping the page.
   const isReader = location.pathname.startsWith('/read/');
+
+  // Nothing renders until favourites and progress are read back from Dexie.
+  // The first IndexedDB open on a cold start can take longer than the first
+  // API response, and a route that renders before then would show an unstarred
+  // comic the user has favourited — worse, a tap in that window is silently
+  // undone the moment hydration lands and replaces the store.
+  if (!hydrated) {
+    return (
+      <div className="flex min-h-viewport flex-col bg-tg-bg text-tg-text">
+        <Spinner label="Loading your library" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-viewport flex-col bg-tg-bg text-tg-text">

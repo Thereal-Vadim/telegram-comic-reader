@@ -210,6 +210,20 @@ export class ApiClient {
   }
 
   /**
+   * Resolve an API-relative URL against the configured base.
+   *
+   * The backend returns image paths relative to itself (`/api/image/...`).
+   * Rendering those directly only works when the app and the API share an
+   * origin; as soon as `VITE_API_BASE` points elsewhere, the browser resolves
+   * them against the *frontend* origin and every image 404s. Every image URL
+   * must therefore go through here rather than into `src` unchanged.
+   */
+  absoluteUrl(url: string): string {
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    return `${this.#baseUrl}${url}`;
+  }
+
+  /**
    * Absolute URL for an image at a given variant.
    *
    * Page URLs come back from the API already pointing at `screen`; this
@@ -217,8 +231,7 @@ export class ApiClient {
    * pinch without another round trip to the catalog.
    */
   imageUrl(url: string, variant: ImageVariant): string {
-    const absolute = url.startsWith('http') ? url : `${this.#baseUrl}${url}`;
-    const parsed = new URL(absolute, window.location.origin);
+    const parsed = new URL(this.absoluteUrl(url), window.location.origin);
     parsed.searchParams.set('v', variant);
     return parsed.toString();
   }

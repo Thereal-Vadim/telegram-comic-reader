@@ -311,6 +311,18 @@ export class LocalAdapter implements ProviderAdapter {
       throw new AppError('NOT_FOUND', 'image path does not exist');
     }
 
+    /*
+     * A bare id with no entry suffix is a cover request, and the id is the
+     * comic's own id. Covers therefore have to resolve the same way the
+     * catalog listing chose them, or the URL the listing handed out will not
+     * resolve back to anything.
+     */
+    if (stat.isDirectory()) {
+      const cover = await this.#findSeriesCover(decoded);
+      if (!cover) throw new AppError('NOT_FOUND', 'this series has no usable cover image');
+      return cover;
+    }
+
     if (stat.isFile() && ARCHIVE_EXT.test(decoded)) {
       // Cover request for a bare archive: hand back its first image.
       const entries = await listImageEntries(abs);

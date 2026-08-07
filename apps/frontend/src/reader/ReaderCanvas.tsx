@@ -94,7 +94,26 @@ export function ReaderCanvas({
   paperColor = '#f8f5ef',
   onStats,
 }: ReaderCanvasProps): React.JSX.Element {
-  const manager = useMemo(() => new TextureManager({ screenCap: 3, zoomCap: 1 }), []);
+  /*
+   * The manager's lifetime is tied to the mount, not to a memo.
+   *
+   * Holding it in `useMemo` and disposing it from an effect cleanup is subtly
+   * broken: React may keep the memoized value across a remount while the
+   * cleanup has already disposed it, leaving a permanently dead manager whose
+   * every `acquire` returns null. StrictMode's simulated unmount reproduces
+   * that on the first render in development, and any future remount would do
+   * the same in production. Keeping it in state and replacing it when it comes
+   * back disposed makes the remount path explicit.
+   */
+  const [manager, setManager] = useState(() => new TextureManager({ screenCap: 3, zoomCap: 1 }));
+
+  useEffect(() => {
+    if (manager.disposed) {
+      setManager(new TextureManager({ screenCap: 3, zoomCap: 1 }));
+      return;
+    }
+    return () => manager.dispose();
+  }, [manager]);
 
   // Textures are React state because a swap must re-render the scene once;
   // the *animation* never touches state, only these three slots do.
@@ -177,18 +196,33 @@ export function ReaderCanvas({
     };
   }, [index, pages, manager, generation]);
 
-  /* Full teardown when the reader closes. */
-  useEffect(
-    () => () => {
-      manager.dispose();
-    },
-    [manager],
-  );
-
+  /*
+   * Publish the live budget on `window`.
+   *
+   * This is what makes the cap externally checkable: an end-to-end test can
+   * turn two hundred pages and read the real resident count rather than
+   * trusting that the code path it cannot see is doing what it claims. It is
+   * two numbers on a global, so it stays in production builds where it is
+   * equally useful for diagnosing a report from a real device.
+   */
   useEffect(() => {
-    if (!onStats) return;
-    const id = window.setInterval(() => onStats(manager.stats()), 500);
-    return () => window.clearInterval(id);
+    const publish = (): void => {
+      const stats = manager.stats();
+      const target = window as unknown as {
+        __READER_TEXTURE_COUNT__?: number;
+        __READER_TEXTURE_STATS__?: typeof stats;
+      };
+      target.__READER_TEXTURE_COUNT__ = stats.screenCount;
+      target.__READER_TEXTURE_STATS__ = stats;
+      onStats?.(stats);
+    };
+
+    publish();
+    const id = window.setInterval(publish, 250);
+    return () => {
+      window.clearInterval(id);
+      delete (window as unknown as { __READER_TEXTURE_COUNT__?: number }).__READER_TEXTURE_COUNT__;
+    };
   }, [manager, onStats]);
 
   const handleTurnComplete = useCallback(

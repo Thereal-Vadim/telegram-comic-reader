@@ -40,6 +40,9 @@ export interface LibraryState {
 const HISTORY_KEY = 'history';
 const HISTORY_LIMIT = 50;
 
+/** Shared so several mounting components produce one read, not one each. */
+let hydration: Promise<void> | null = null;
+
 export const useLibrary = create<LibraryState>((set, get) => ({
   favorites: new Set(),
   progress: new Map(),
@@ -49,18 +52,32 @@ export const useLibrary = create<LibraryState>((set, get) => ({
   hydrate: async () => {
     if (get().hydrated) return;
 
-    const [favorites, progressRows, historyRow] = await Promise.all([
-      db.favorites.toArray(),
-      db.progress.toArray(),
-      db.kv.get(HISTORY_KEY),
-    ]);
+    hydration ??= (async () => {
+      try {
+        const [favorites, progressRows, historyRow] = await Promise.all([
+          db.favorites.toArray(),
+          db.progress.toArray(),
+          db.kv.get(HISTORY_KEY),
+        ]);
 
-    set({
-      favorites: new Set(favorites.map((f: Favorite) => f.comicId)),
-      progress: new Map(progressRows.map((p: ReadingProgress) => [p.chapterId, p])),
-      history: Array.isArray(historyRow?.value) ? (historyRow.value as string[]) : [],
-      hydrated: true,
-    });
+        set({
+          favorites: new Set(favorites.map((f: Favorite) => f.comicId)),
+          progress: new Map(progressRows.map((p: ReadingProgress) => [p.chapterId, p])),
+          history: Array.isArray(historyRow?.value) ? (historyRow.value as string[]) : [],
+          hydrated: true,
+        });
+      } catch (err) {
+        // A blocked or corrupt database must not leave the app stuck behind
+        // the hydration gate; an empty library is recoverable, a blank screen
+        // is not.
+        console.warn('[library] could not read local library; starting empty', err);
+        set({ hydrated: true });
+      } finally {
+        hydration = null;
+      }
+    })();
+
+    return hydration;
   },
 
   toggleFavorite: async (comicId) => {

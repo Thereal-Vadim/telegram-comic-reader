@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api/client';
 
 /**
  * Cover art with lazy loading and an explicit failure state.
@@ -27,6 +28,10 @@ export function CoverImage({
   const ref = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(eager);
   const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
+
+  // Resolved here rather than at each call site, so no caller can accidentally
+  // render a backend-relative path against the frontend's own origin.
+  const resolved = useMemo(() => (src ? api.absoluteUrl(src) : null), [src]);
 
   useEffect(() => {
     if (eager || visible || !ref.current) return;
@@ -57,9 +62,9 @@ export function CoverImage({
       className={`relative overflow-hidden rounded-lg bg-tg-secondary-bg ${className}`}
       style={{ aspectRatio: '2 / 3' }}
     >
-      {visible && src && status !== 'error' && (
+      {visible && resolved && status !== 'error' && (
         <img
-          src={src}
+          src={resolved}
           alt={alt}
           loading={eager ? 'eager' : 'lazy'}
           decoding="async"
@@ -73,7 +78,7 @@ export function CoverImage({
 
       {status !== 'loaded' && (
         <div className="absolute inset-0 flex items-center justify-center">
-          {status === 'error' || !src ? (
+          {status === 'error' || !resolved ? (
             <span className="px-2 text-center text-xs text-tg-hint">{alt.slice(0, 40)}</span>
           ) : (
             <div className="h-full w-full animate-pulse bg-tg-secondary-bg" />

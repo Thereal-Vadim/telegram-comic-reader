@@ -173,6 +173,11 @@ export class TextureManager {
       texture.flipY = true;
       texture.needsUpdate = true;
 
+      // Measured before closing: a closed ImageBitmap reports width and height
+      // of zero, so reading the dimensions afterwards silently yields 0 bytes
+      // and the whole budget readout becomes meaningless.
+      const bytes = estimateBytes(bitmap.width, bitmap.height);
+
       // Force the upload now so the bitmap can be freed. Without this the
       // upload is deferred to the first draw, and we would have to keep the
       // bitmap alive until then, doubling peak memory for every page.
@@ -180,7 +185,6 @@ export class TextureManager {
       bitmap.close();
       bitmap = null;
 
-      const bytes = texture.image ? estimateBytes(texture) : 0;
       this.#slots.set(key, {
         key,
         source,
@@ -318,8 +322,7 @@ export class TextureManager {
 }
 
 /** GPU footprint of a texture. Mipmaps are off, so this is just w x h x 4. */
-function estimateBytes(texture: Texture): number {
-  const image = texture.image as { width?: number; height?: number } | null;
-  if (!image?.width || !image.height) return 0;
-  return image.width * image.height * 4;
+function estimateBytes(width: number, height: number): number {
+  if (!width || !height) return 0;
+  return width * height * 4;
 }
