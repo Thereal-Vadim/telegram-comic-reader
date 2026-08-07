@@ -11,6 +11,7 @@ import {
   type ImageVariant,
 } from '@comic/shared';
 import type { z } from 'zod';
+import { bootError, bootOk, bootStage } from '../boot/log';
 import { getWebApp } from '../telegram/webapp';
 
 /**
@@ -97,26 +98,37 @@ export class ApiClient {
   async #authenticate(): Promise<CachedSession> {
     this.#authInFlight ??= (async () => {
       const initData = getWebApp().initData;
+      bootStage(
+        'auth',
+        initData ? 'Signing in with Telegram initData' : 'Signing in (dev session)',
+      );
 
       const res = await fetch(`${this.#baseUrl}/api/auth/telegram`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ initData: initData || 'dev' }),
-      }).catch(() => {
-        throw new ApiClientError('NETWORK', 'could not reach the server to sign in');
+      }).catch((err: unknown) => {
+        bootError('auth', 'could not reach the server to sign in');
+        throw new ApiClientError(
+          'NETWORK',
+          err instanceof Error ? err.message : 'could not reach the server to sign in',
+        );
       });
 
       if (!res.ok) {
+        bootError('auth', `sign-in rejected (HTTP ${res.status})`);
         throw new ApiClientError('UNAUTHORIZED', 'sign-in was rejected; relaunch the app', res.status);
       }
 
       const parsed = AuthResponse.safeParse(await res.json());
       if (!parsed.success) {
+        bootError('auth', 'sign-in response shape mismatch');
         throw new ApiClientError('MALFORMED', 'sign-in response did not match the expected shape');
       }
 
       const session = { token: parsed.data.token, expiresAt: parsed.data.expiresAt };
       this.#saveSession(session);
+      bootOk('auth', `signed in as ${parsed.data.user.firstName}`);
       return session;
     })().finally(() => {
       this.#authInFlight = null;
@@ -187,19 +199,45 @@ export class ApiClient {
     return parsed.data;
   }
 
-  home(): Promise<HomeFeedResponse> {
-    return this.#request('/api/home', HomeFeedResponse);
+  async home(): Promise<HomeFeedResponse> {
+    bootStage('home', 'Fetching popular shelves (may take a while on first com-x login)');
+    try {
+      const feed = await this.#request('/api/home', HomeFeedResponse);
+      const shelfCount = feed.shelves.reduce((n, s) => n + s.items.length, 0);
+      bootOk(
+        'home',
+        `${feed.hero.length} hero, ${shelfCount} shelf items` +
+          (feed.degraded.length ? `, ${feed.degraded.length} degraded` : ''),
+      );
+      return feed;
+    } catch (err) {
+      bootError('home', err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   }
 
   adapters(): Promise<AdapterListResponse> {
     return this.#request('/api/adapters', AdapterListResponse);
   }
 
-  search(params: { q: string; page?: number; adapter?: string; genre?: string }): Promise<SearchResponse> {
+  async search(params: {
+    q: string;
+    page?: number;
+    adapter?: string;
+    genre?: string;
+  }): Promise<SearchResponse> {
     const qs = new URLSearchParams({ q: params.q, page: String(params.page ?? 0) });
     if (params.adapter) qs.set('adapter', params.adapter);
     if (params.genre) qs.set('genre', params.genre);
-    return this.#request(`/api/search?${qs}`, SearchResponse);
+    bootStage('search', params.q ? `Query “${params.q}”` : 'Browsing catalog');
+    try {
+      const result = await this.#request(`/api/search?${qs}`, SearchResponse);
+      bootOk('search', `${result.items.length} results`);
+      return result;
+    } catch (err) {
+      bootError('search', err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   }
 
   comic(id: string): Promise<ChapterListResponse> {
