@@ -110,13 +110,14 @@ async function downloadPage(
 
       // Storage exhaustion will not resolve by retrying; surface it at once so
       // the UI can offer to free space.
-      if (isQuota) throw new Error('QUOTA_EXCEEDED');
+      if (isQuota) throw new Error('QUOTA_EXCEEDED', { cause: err });
       if (!retryable || signal.aborted) break;
       if (attempt < MAX_ATTEMPTS - 1) await sleep(backoffMs(attempt));
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error('page download failed');
+  if (lastError instanceof Error) throw lastError;
+  throw new Error('page download failed', { cause: lastError });
 }
 
 async function runTask(taskId: number, pages: PageDescriptor[]): Promise<void> {

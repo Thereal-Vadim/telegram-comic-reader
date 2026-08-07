@@ -18,10 +18,17 @@ import type { HapticImpactStyle, HapticNotificationType } from './types';
  */
 export function useBackButton(onBack: (() => void) | null): void {
   const handler = useRef(onBack);
-  handler.current = onBack;
+  // Updated in an effect rather than during render: a ref written while
+  // rendering is unsafe under concurrent rendering, and nothing reads this
+  // before paint — the only reader is the bridge's click callback.
+  useEffect(() => {
+    handler.current = onBack;
+  });
+
+  const bound = onBack !== null;
 
   useEffect(() => {
-    if (!onBack) return;
+    if (!bound) return;
     const tg = getWebApp();
     const wasVisible = tg.BackButton.isVisible;
 
@@ -37,7 +44,7 @@ export function useBackButton(onBack: (() => void) | null): void {
       if (!wasVisible) tg.BackButton.hide();
     };
     // `onBack` is only read for its nullability; the ref carries the identity.
-  }, [onBack === null]);
+  }, [bound]);
 }
 
 export interface MainButtonConfig {
@@ -50,9 +57,12 @@ export interface MainButtonConfig {
 
 /** Drive the native main button from component state. */
 export function useMainButton(config: MainButtonConfig | null): void {
-  const handler = useRef<(() => void) | null>(null);
-  handler.current = config?.onClick ?? null;
+  const handler = useRef<(() => void) | null>(config?.onClick ?? null);
+  useEffect(() => {
+    handler.current = config?.onClick ?? null;
+  });
 
+  const bound = config !== null;
   const visible = config?.visible ?? true;
   const enabled = config?.enabled ?? true;
   const progress = config?.progress ?? false;
@@ -70,7 +80,7 @@ export function useMainButton(config: MainButtonConfig | null): void {
 
   useEffect(() => {
     const tg = getWebApp();
-    if (!config || !visible) {
+    if (!bound || !visible) {
       tg.MainButton.hide();
       return;
     }
@@ -80,7 +90,7 @@ export function useMainButton(config: MainButtonConfig | null): void {
     if (progress) tg.MainButton.showProgress(true);
     else tg.MainButton.hideProgress();
     tg.MainButton.show();
-  }, [config === null, text, visible, enabled, progress]);
+  }, [bound, text, visible, enabled, progress]);
 }
 
 /**

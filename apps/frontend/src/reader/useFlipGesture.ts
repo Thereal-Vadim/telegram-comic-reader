@@ -110,7 +110,9 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
 
   // Latest callbacks without re-binding the handlers every render.
   const callbacks = useRef({ onCommit, onTapCentre, onThresholdCrossed, canTurn });
-  callbacks.current = { onCommit, onTapCentre, onThresholdCrossed, canTurn };
+  useEffect(() => {
+    callbacks.current = { onCommit, onTapCentre, onThresholdCrossed, canTurn };
+  });
 
   const commit = useCallback(
     (direction: TurnDirection) => {

@@ -129,7 +129,9 @@ export function ReaderCanvas({
   // Guards against a late texture load writing into state after the index has
   // moved on, which would briefly show the wrong page.
   const indexRef = useRef(index);
-  indexRef.current = index;
+  useEffect(() => {
+    indexRef.current = index;
+  });
 
   const canTurn = useCallback(
     (direction: TurnDirection): boolean =>
