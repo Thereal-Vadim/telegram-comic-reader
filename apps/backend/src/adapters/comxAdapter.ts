@@ -152,14 +152,36 @@ export class ComxAdapter implements ProviderAdapter {
   }
 
   async getCatalog(page = 1, categoryUrl?: string): Promise<CatalogResponse> {
-    const targetUrl = categoryUrl
-      ? categoryUrl.includes('/page/')
-        ? categoryUrl
-        : `${categoryUrl.replace(/\/$/, '')}/page/${page}/`
-      : `${this.#baseUrl}/comix/page/${page}/`;
+    const candidates = categoryUrl
+      ? [
+          categoryUrl.includes('/page/')
+            ? categoryUrl
+            : `${categoryUrl.replace(/\/$/, '')}/page/${page}/`,
+          categoryUrl,
+        ]
+      : [
+          `${this.#baseUrl}/comix/page/${page}/`,
+          `${this.#baseUrl}/comix/`,
+          `${this.#baseUrl}/`,
+        ];
 
-    const html = await this.#fetchHtml(targetUrl);
-    return this.parseCatalogPage(html, page);
+    let lastError: unknown;
+    for (const targetUrl of candidates) {
+      try {
+        const html = await this.#fetchHtml(targetUrl);
+        const parsed = this.parseCatalogPage(html, page);
+        if (parsed.items.length > 0 || targetUrl === candidates[candidates.length - 1]) {
+          return parsed;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    if (lastError instanceof AppError) throw lastError;
+    throw new AppError(
+      'UPSTREAM_UNAVAILABLE',
+      `com-x catalog unavailable: ${String(lastError ?? 'unknown')}`,
+    );
   }
 
   parseCatalogPage(html: string, page: number): CatalogResponse {
