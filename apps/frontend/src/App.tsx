@@ -74,7 +74,7 @@ function TabBar(): React.JSX.Element {
     { to: '/', label: 'Home' },
     { to: '/search', label: 'Search' },
     { to: '/downloads', label: 'Downloads' },
-    { to: '/settings', label: 'Sources' },
+    { to: '/settings', label: 'Library' },
   ] as const;
 
   return (

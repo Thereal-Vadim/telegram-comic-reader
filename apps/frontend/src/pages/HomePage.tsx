@@ -72,8 +72,8 @@ export function HomePage(): React.JSX.Element {
   if (!hasContent) {
     return (
       <EmptyState
-        title="No comics found"
-        description="Point the server at a folder of CBZ files with LOCAL_LIBRARY_DIR, or add an OPDS catalog with OPDS_CATALOGS, then restart it."
+        title="Library is empty"
+        description="Configure LOCAL_LIBRARY_DIR or OPDS_CATALOGS on the server (see the Library tab), then restart. The app only shows comics from sources you set yourself."
       />
     );
   }

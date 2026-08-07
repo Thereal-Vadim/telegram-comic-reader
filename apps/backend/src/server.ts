@@ -53,17 +53,24 @@ export async function buildServer(overrides?: Partial<NodeJS.ProcessEnv>): Promi
     });
   };
 
-  // Archive.org CBZ downloads are large and redirect onto ia*.archive.org; they
-  // get a dedicated fetcher with a higher ceiling and hop re-validation.
-  const archiveFetch = async (url: string, headers: Record<string, string> = {}) =>
-    safeFetchFollowingRedirects(url, guardOptions, {
-      headers,
-      timeoutMs: 120_000,
-      maxBytes: cfg.archiveMaxBytes,
-      accept: headers['accept'] ?? headers['Accept'] ?? '*/*',
-    });
+  // OPDS acquisition: CBZ bodies are large and may 302 onto a CDN. Use a
+  // redirect-aware fetcher with the archive byte ceiling for those adapters.
+  const opdsFetch = async (url: string, headers: Record<string, string> = {}) => {
+    const accept = headers['accept'] ?? headers['Accept'] ?? '*/*';
+    const wantsArchive =
+      accept.includes('zip') || accept.includes('comicbook') || accept === '*/*';
+    if (wantsArchive && !accept.startsWith('image/')) {
+      return safeFetchFollowingRedirects(url, guardOptions, {
+        headers,
+        timeoutMs: 120_000,
+        maxBytes: cfg.archiveMaxBytes,
+        accept,
+      });
+    }
+    return guardedFetch(url, headers);
+  };
 
-  const registry = buildRegistry(cfg, guardedFetch, archiveFetch);
+  const registry = buildRegistry(cfg, opdsFetch);
   guardOptions = { allowedHosts: registry.proxyHosts, allowPrivate: cfg.allowPrivateUpstream };
 
   const cache = new ImageCache(cfg.imageCacheDir, cfg.imageCacheMaxBytes);

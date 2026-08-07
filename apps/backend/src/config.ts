@@ -43,19 +43,16 @@ const RawConfig = z.object({
    * OPDS catalog roots, comma separated. Each becomes its own adapter and its
    * origin is added to the image proxy allowlist.
    * Format: `label|url|username|password` (credentials optional).
+   *
+   * Point this at YOUR catalog (Kavita, Komga, Calibre-Web, …). The app does
+   * not ship with any third-party content source.
    */
   OPDS_CATALOGS: z.string().default(''),
 
   /**
-   * Internet Archive public-domain / Creative Commons comics. Off by setting
-   * ARCHIVE_ORG_ENABLED=false. The adapter only surfaces items whose metadata
-   * carries an explicit open license URL.
+   * Ceiling for a whole CBZ download from an OPDS acquisition link (individual
+   * pages stay under IMAGE_MAX_SOURCE_BYTES).
    */
-  ARCHIVE_ORG_ENABLED: z
-    .enum(['true', 'false'])
-    .default('true')
-    .transform((v) => v === 'true'),
-  /** Ceiling for a whole CBZ download from archive.org (pages stay under IMAGE_MAX_SOURCE_BYTES). */
   ARCHIVE_MAX_BYTES: z.coerce
     .number()
     .int()
@@ -152,7 +149,6 @@ export interface Config {
   readonly corsOrigins: string[] | true;
   readonly localLibraryDir: string | undefined;
   readonly opdsCatalogs: OpdsCatalogConfig[];
-  readonly archiveOrgEnabled: boolean;
   readonly archiveMaxBytes: number;
   readonly imageCacheDir: string;
   readonly imageCacheMaxBytes: number;
@@ -197,7 +193,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     corsOrigins: raw.CORS_ORIGINS === '*' ? true : csv(raw.CORS_ORIGINS),
     localLibraryDir: raw.LOCAL_LIBRARY_DIR ? path.resolve(raw.LOCAL_LIBRARY_DIR) : undefined,
     opdsCatalogs,
-    archiveOrgEnabled: raw.ARCHIVE_ORG_ENABLED,
     archiveMaxBytes: raw.ARCHIVE_MAX_BYTES,
     imageCacheDir: path.resolve(cacheDir),
     imageCacheMaxBytes: raw.IMAGE_CACHE_MAX_BYTES,

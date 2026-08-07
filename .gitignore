@@ -1,24 +1,22 @@
-node_modules/
-dist/
-build/
-coverage/
-*.tsbuildinfo
 
-.env
-.env.local
-.env.*.local
-
-# Backend runtime data: transcoded image cache and the local comic library
-.cache/
-var/
 apps/backend/.cache/
 apps/backend/var/
-
-# Playwright
-test-results/
-playwright-report/
+# Backend runtime data: transcoded image cache and the local comic library
 blob-report/
-.playwright/
-
+build/
+.cache/
+coverage/
+.data/
+dist/
 .DS_Store
+.env
+.env.*.local
+.env.local
 *.log
+node_modules/
+.playwright/
+# Playwright
+playwright-report/
+test-results/
+*.tsbuildinfo
+var/

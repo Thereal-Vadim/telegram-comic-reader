@@ -175,7 +175,7 @@ export type PageListResponse = z.infer<typeof PageListResponse>;
 export const AdapterInfo = z.object({
   id: AdapterId,
   label: z.string(),
-  kind: z.enum(['local', 'opds', 'archive']),
+  kind: z.enum(['local', 'opds']),
   /** False when the adapter is configured but its source is unreachable. */
   healthy: z.boolean(),
 });

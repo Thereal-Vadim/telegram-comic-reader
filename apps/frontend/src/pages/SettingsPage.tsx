@@ -4,13 +4,11 @@ import { api } from '../api/client';
 import { ErrorState, Spinner } from '../components/states';
 
 /**
- * Sources the library is reading from.
+ * Library status — what YOU pointed the server at.
  *
- * This is deliberately not a free-form “paste any website URL” box. Arbitrary
- * site scraping is how piracy frontends get built; instead we surface the
- * licensed / open sources the backend is configured for, with a clear link to
- * each one so the user can see where the files come from and download them
- * under that source's own terms.
+ * The app does not browse or scrape any third-party comic site. Content only
+ * appears after the operator sets LOCAL_LIBRARY_DIR and/or OPDS_CATALOGS on
+ * the backend. This screen just shows whether those hooks are live.
  */
 export function SettingsPage(): React.JSX.Element {
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
@@ -34,16 +32,16 @@ export function SettingsPage(): React.JSX.Element {
     void load();
   }, [load]);
 
-  if (loading && adapters.length === 0) return <Spinner label="Loading sources" />;
+  if (loading && adapters.length === 0) return <Spinner label="Loading library" />;
   if (error && adapters.length === 0) return <ErrorState error={error} onRetry={load} />;
 
   return (
     <div className="px-4 pb-24 pt-4">
       <header className="mb-6">
-        <h1 className="text-lg font-bold text-tg-text">Sources</h1>
+        <h1 className="text-lg font-bold text-tg-text">Library</h1>
         <p className="mt-1 text-sm text-tg-hint">
-          Libraries this app can browse and download from. Only openly licensed
-          or self-hosted catalogs are supported.
+          Comics come only from the folders and catalogs you configure on the
+          server. Nothing is pulled from public websites by default.
         </p>
       </header>
 
@@ -53,43 +51,63 @@ export function SettingsPage(): React.JSX.Element {
         </h2>
 
         {adapters.length === 0 ? (
-          <p className="text-sm text-tg-hint">No sources are configured on the server.</p>
+          <p className="rounded-xl bg-tg-secondary-bg px-4 py-3 text-sm text-tg-hint">
+            No library configured yet. Set <code className="text-tg-text">LOCAL_LIBRARY_DIR</code>{' '}
+            or <code className="text-tg-text">OPDS_CATALOGS</code> in the backend env and restart.
+          </p>
         ) : (
-          adapters.map((adapter) => <SourceCard key={adapter.id} adapter={adapter} />)
+          adapters.map((adapter) => <LibraryCard key={adapter.id} adapter={adapter} />)
         )}
       </section>
 
       <section className="mt-8 space-y-3">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
-          About licensing
+          How to point the app at your files
         </h2>
-        <p className="text-sm leading-relaxed text-tg-hint">
-          The Internet Archive source only lists comics whose metadata carries
-          a Creative Commons or public-domain license. Copyrighted uploads on
-          archive.org are filtered out on purpose.
+        <ol className="list-decimal space-y-3 pl-5 text-sm leading-relaxed text-tg-hint">
+          <li>
+            <span className="text-tg-text">Folder of CBZ/ZIP files</span>
+            <br />
+            Set <code className="text-tg-text">LOCAL_LIBRARY_DIR=/path/to/comics</code>. Layout:{' '}
+            <code className="text-tg-text">Series/Chapter 01.cbz</code> or a bare{' '}
+            <code className="text-tg-text">Title.cbz</code>.
+          </li>
+          <li>
+            <span className="text-tg-text">Your OPDS server</span>
+            <br />
+            Set{' '}
+            <code className="text-tg-text">
+              OPDS_CATALOGS=My Library|https://your-server/opds|user|pass
+            </code>{' '}
+            (user/pass optional). Works with Kavita, Komga, Calibre-Web, etc.
+          </li>
+          <li>
+            Restart the backend. This screen and Home will list whatever those
+            hooks expose — you choose the origin.
+          </li>
+        </ol>
+        <p className="text-xs text-tg-hint">
+          Full template: <code className="text-tg-text">.env.example</code> in the repo root.
         </p>
-        <a
-          href="https://archive.org/details/comics"
-          target="_blank"
-          rel="noreferrer"
-          className="inline-block text-sm font-medium text-tg-link"
-        >
-          Browse Internet Archive Comics →
-        </a>
       </section>
     </div>
   );
 }
 
-function SourceCard({ adapter }: { adapter: AdapterInfo }): React.JSX.Element {
-  const meta = describeSource(adapter);
+function LibraryCard({ adapter }: { adapter: AdapterInfo }): React.JSX.Element {
+  const blurb =
+    adapter.kind === 'local'
+      ? 'CBZ / ZIP files from LOCAL_LIBRARY_DIR on this server.'
+      : adapter.kind === 'opds'
+        ? 'OPDS catalog you configured (Kavita, Komga, Calibre-Web, …).'
+        : adapter.kind;
 
   return (
     <article className="rounded-xl bg-tg-secondary-bg px-4 py-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-tg-text">{adapter.label}</h3>
-          <p className="mt-0.5 text-xs text-tg-hint">{meta.blurb}</p>
+          <p className="mt-0.5 text-xs text-tg-hint">{blurb}</p>
         </div>
         <span
           className={`shrink-0 rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
@@ -101,46 +119,6 @@ function SourceCard({ adapter }: { adapter: AdapterInfo }): React.JSX.Element {
           {adapter.healthy ? 'Online' : 'Offline'}
         </span>
       </div>
-
-      {meta.href && (
-        <a
-          href={meta.href}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-3 inline-block text-xs font-medium text-tg-link"
-        >
-          {meta.linkLabel}
-        </a>
-      )}
     </article>
   );
-}
-
-function describeSource(adapter: AdapterInfo): {
-  blurb: string;
-  href: string | null;
-  linkLabel: string;
-} {
-  switch (adapter.kind) {
-    case 'archive':
-      return {
-        blurb: 'Public-domain and Creative Commons comics from archive.org.',
-        href: 'https://archive.org/details/comics',
-        linkLabel: 'Open licensed catalog →',
-      };
-    case 'opds':
-      return {
-        blurb: 'Self-hosted OPDS catalog (Kavita, Komga, Calibre-Web, …).',
-        href: null,
-        linkLabel: '',
-      };
-    case 'local':
-      return {
-        blurb: 'CBZ / CBR / PDF files on the server disk.',
-        href: null,
-        linkLabel: '',
-      };
-    default:
-      return { blurb: adapter.kind, href: null, linkLabel: '' };
-  }
 }
