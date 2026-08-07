@@ -223,6 +223,7 @@ export class AdapterRegistry {
       volume: c.volume,
       pageCount: c.pageCount,
       publishedAt: c.publishedAt,
+      coverUrl: c.coverUrl ?? null,
     }));
   }
 
@@ -237,6 +238,25 @@ export class AdapterRegistry {
       width: p.width,
       height: p.height,
     }));
+  }
+
+  /**
+   * First-page preview for a chapter card. Uses getPages so every adapter
+   * works; only the first page is exposed as a thumb proxy URL.
+   */
+  async getChapterPreview(namespacedChapterId: string): Promise<{
+    chapterId: string;
+    pageCount: number;
+    coverUrl: string | null;
+  }> {
+    const { adapter, localId } = this.resolve(namespacedChapterId);
+    const pages = await adapter.getPages(localId);
+    const first = pages[0];
+    return {
+      chapterId: namespacedChapterId,
+      pageCount: pages.length,
+      coverUrl: first ? this.imageUrl(adapter.id, first.id, 'thumb') : null,
+    };
   }
 
   async resolveImage(adapterId: string, ref: string): Promise<ImageSource> {

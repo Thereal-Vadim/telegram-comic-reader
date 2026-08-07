@@ -319,6 +319,7 @@ export class OpdsAdapter implements ProviderAdapter {
           volume: null,
           pageCount: 0, // unknown until the archive is fetched
           publishedAt: child.updated ?? null,
+          coverUrl: null,
         });
       }
 
@@ -349,6 +350,7 @@ export class OpdsAdapter implements ProviderAdapter {
         volume: null,
         pageCount: 0,
         publishedAt: entry.updated ?? null,
+        coverUrl: null,
       },
     ];
   }
