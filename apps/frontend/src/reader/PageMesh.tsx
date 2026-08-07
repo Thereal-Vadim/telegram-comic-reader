@@ -57,7 +57,8 @@ export function usePageMaterial(paperColor: string): ShaderMaterial {
       uniforms: {
         uProgress: { value: 0 },
         uWidth: { value: 1 },
-        uBowAmount: { value: 0.18 },
+        uBowAmount: { value: 0.12 },
+        uTurnSign: { value: 1 },
         uFront: { value: null },
         uBack: { value: null },
         uHasFront: { value: 0 },

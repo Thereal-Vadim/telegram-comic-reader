@@ -26,6 +26,7 @@ precision highp float;
 uniform float uProgress;   // 0 = flat and closed, 1 = fully turned
 uniform float uWidth;      // page width in world units
 uniform float uBowAmount;  // peak bow height as a fraction of page width
+uniform float uTurnSign;   // +1 next (spine left), -1 prev (spine right)
 
 varying vec2 vUv;
 varying float vShade;
@@ -36,11 +37,12 @@ void main() {
   vUv = uv;
 
   vec3 p = position;
+  float halfW = uWidth * 0.5;
 
-  // Distance from the spine. The plane is centred on the origin, so the spine
-  // (the hinge) sits at x = -uWidth/2 and localX runs 0..uWidth across the page.
-  float localX = p.x + uWidth * 0.5;
-  float u = localX / uWidth;
+  // Distance from the active spine. Next peels from the right (hinge left);
+  // prev peels from the left (hinge right) so back-turns do not curl the wrong way.
+  float localX = uTurnSign > 0.0 ? (p.x + halfW) : (halfW - p.x);
+  float u = clamp(localX / uWidth, 0.0, 1.0);
 
   float phi = PI * uProgress;
   float bow = sin(PI * uProgress) * uBowAmount * uWidth;
@@ -57,7 +59,7 @@ void main() {
   float rx = localX * c - lift * s;
   float rz = localX * s + lift * c;
 
-  p.x = rx - uWidth * 0.5;
+  p.x = uTurnSign > 0.0 ? (rx - halfW) : (halfW - rx);
   p.z = rz;
 
   // Cheap directional shading. The surface slope in x is the derivative of the
@@ -65,7 +67,7 @@ void main() {
   // viewer, so it darkens. This is what makes the curl read as three
   // dimensional without a light or a normal attribute.
   float slope = cos(u * PI * 0.5) * bow * (PI * 0.5) / uWidth;
-  vShade = clamp(1.0 - abs(slope) * 0.55, 0.55, 1.0);
+  vShade = clamp(1.0 - abs(slope) * 0.45, 0.6, 1.0);
 
   gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
 }
@@ -107,6 +109,7 @@ export const PAGE_UNIFORMS = {
   progress: 'uProgress',
   width: 'uWidth',
   bowAmount: 'uBowAmount',
+  turnSign: 'uTurnSign',
   front: 'uFront',
   back: 'uBack',
   hasFront: 'uHasFront',

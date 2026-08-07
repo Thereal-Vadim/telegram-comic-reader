@@ -46,7 +46,8 @@ function createPageMaterial(paperColor: string): ShaderMaterial {
     uniforms: {
       uProgress: { value: 0 },
       uWidth: { value: 1 },
-      uBowAmount: { value: 0.18 },
+      uBowAmount: { value: 0.12 },
+      uTurnSign: { value: 1 },
       uFront: { value: null },
       uBack: { value: null },
       uHasFront: { value: 0 },
@@ -120,6 +121,11 @@ export function FlipScene({
     // While dragging, progress is the finger position; the spring only takes
     // over on release. Integrating during the drag would add lag to the touch.
     if (!state.dragging) {
+      // Finger / tap impulse is progress-units per second; consume once.
+      if (state.springImpulse !== 0) {
+        velocity.current = state.springImpulse;
+        state.springImpulse = 0;
+      }
       const stepped = stepSpring(state.progress, state.target, velocity.current, delta);
       state.progress = stepped.value;
       velocity.current = stepped.velocity;
@@ -130,6 +136,7 @@ export function FlipScene({
     const p = state.progress;
     const forward = p >= 0;
     const magnitude = Math.min(1, Math.abs(p));
+    const turnSign = forward ? 1 : -1;
 
     // Pick which pages the two sheets show, based on turn direction. Done here
     // rather than in React so reversing mid-drag is instant.
@@ -151,11 +158,13 @@ export function FlipScene({
       sheetMaterial.uniforms['uOpacity']!.value = 1;
     }
 
+    sheetMaterial.uniforms['uTurnSign']!.value = turnSign;
     sheetMaterial.uniforms['uFront']!.value = front;
     sheetMaterial.uniforms['uHasFront']!.value = front ? 1 : 0;
     sheetMaterial.uniforms['uBack']!.value = destination;
     sheetMaterial.uniforms['uHasBack']!.value = destination ? 1 : 0;
 
+    baseMaterial.uniforms['uTurnSign']!.value = turnSign;
     baseMaterial.uniforms['uFront']!.value = destination;
     baseMaterial.uniforms['uHasFront']!.value = destination ? 1 : 0;
 
@@ -167,14 +176,23 @@ export function FlipScene({
     camera.updateProjectionMatrix();
 
     // A settled turn hands control back to React exactly once.
+    // Apply the destination as the resting front *before* resetting progress so
+    // there is no one-frame flash of the old page at progress 0.
     if (state.settling && !state.dragging && magnitude >= 0.999) {
       const direction: TurnDirection = forward ? 'next' : 'prev';
       state.settling = false;
       state.progress = 0;
       state.target = 0;
+      state.direction = null;
       velocity.current = 0;
       sheetMaterial.uniforms['uProgress']!.value = 0;
       sheetMaterial.uniforms['uOpacity']!.value = 1;
+      sheetMaterial.uniforms['uFront']!.value = destination;
+      sheetMaterial.uniforms['uHasFront']!.value = destination ? 1 : 0;
+      sheetMaterial.uniforms['uBack']!.value = null;
+      sheetMaterial.uniforms['uHasBack']!.value = 0;
+      baseMaterial.uniforms['uFront']!.value = destination;
+      baseMaterial.uniforms['uHasFront']!.value = destination ? 1 : 0;
       onTurnComplete(direction);
     }
   });

@@ -26,7 +26,6 @@ export function HomePage(): React.JSX.Element {
   const favorites = useLibrary((s) => s.favorites);
 
   const load = useCallback(async () => {
-    setLoading(true);
     setError(null);
     setOfflineFallback(false);
     bootStage('home-ui', 'Loading Home shelves');
@@ -66,7 +65,24 @@ export function HomePage(): React.JSX.Element {
 
   useEffect(() => {
     void hydrate();
+    // Paint last IndexedDB shelf immediately, then refresh from the API.
+    let cancelled = false;
+    void (async () => {
+      const cached = await db.comics.orderBy('cachedAt').reverse().limit(40).toArray();
+      if (cancelled || cached.length === 0) return;
+      setFeed((prev) =>
+        prev ?? {
+          hero: cached.slice(0, 6),
+          shelves: [{ id: 'cached', title: 'Updating…', items: cached }],
+          degraded: [],
+        },
+      );
+      setLoading(false);
+    })();
     void load();
+    return () => {
+      cancelled = true;
+    };
   }, [hydrate, load]);
 
   if (loading && !feed) {

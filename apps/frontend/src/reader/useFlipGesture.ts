@@ -37,6 +37,11 @@ export interface FlipState {
   /** Set once a release has been committed, to suppress duplicate commits. */
   settling: boolean;
   direction: TurnDirection | null;
+  /**
+   * One-shot spring velocity (progress units / second) applied on the first
+   * post-release frame so flicks keep their momentum instead of starting from 0.
+   */
+  springImpulse: number;
   /** Pinch-zoom scale and pan offset, also read directly by the renderer. */
   scale: number;
   panX: number;
@@ -111,6 +116,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
     dragging: false,
     settling: false,
     direction: null,
+    springImpulse: 0,
     scale: 1,
     panX: 0,
     panY: 0,
@@ -166,9 +172,15 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
       s.settling = true;
       s.direction = direction;
       s.target = direction === 'next' ? 1 : -1;
+      // Tap / keyboard turns have no finger velocity — give a modest push so
+      // the spring does not crawl from a dead stop.
+      if (s.springImpulse === 0) {
+        s.springImpulse = direction === 'next' ? 4 : -4;
+      }
       if (reducedMotion) {
         // Skip the animation entirely and hand control back immediately.
         s.progress = s.target;
+        s.springImpulse = 0;
       }
     },
     [reducedMotion],
@@ -398,6 +410,15 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
         return;
       }
 
+      // Convert finger velocity (px/ms) → spring velocity (progress / s).
+      const width = Math.max(1, surfaceWidth.current);
+      const pxPerSec = record.velocity * 1000;
+      const impulse = Math.max(
+        -12,
+        Math.min(12, rtl ? pxPerSec / width : -pxPerSec / width),
+      );
+      s.springImpulse = impulse;
+
       const direction: TurnDirection = s.progress > 0 ? 'next' : 'prev';
       if (
         shouldCommitTurn(s.progress, record.velocity, rtl) &&
@@ -405,7 +426,7 @@ export function useFlipGesture(options: FlipGestureOptions): FlipGestureHandles 
       ) {
         commit(direction);
       } else {
-        s.target = 0; // spring back
+        s.target = 0; // spring back with the leftover finger velocity
       }
     },
     [commit, rtl, setScale],
@@ -450,8 +471,8 @@ export function stepSpring(
   target: number,
   velocity: number,
   deltaSeconds: number,
-  stiffness = 170,
-  damping = 26,
+  stiffness = 210,
+  damping = 24,
 ): { value: number; velocity: number } {
   // Clamp the timestep. A backgrounded tab resumes with a huge delta, and an
   // unclamped spring integrates that into a violent overshoot.
