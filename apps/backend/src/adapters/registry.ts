@@ -176,27 +176,49 @@ export class AdapterRegistry {
     degraded: DegradedAdapter[];
   }> {
     const targets = [...this.#adapters.values()];
-    const { results, degraded } = await this.#fanOut(targets, async (a) => ({
-      adapter: a,
-      items: await a.featured(),
-    }));
-
-    const shelves = results
-      .filter((r) => r.items.length > 0)
-      .map((r) => ({
-        id: r.adapter.id,
-        title: r.adapter.label,
-        items: r.items.map((s) => this.#toSummary(r.adapter, s)),
-      }));
-
-    // The hero row is the head of each shelf, interleaved so one large source
-    // does not crowd out the others.
-    const hero: ComicSummary[] = [];
-    for (let i = 0; i < 5; i++) {
-      for (const shelf of shelves) {
-        const item = shelf.items[i];
-        if (item && hero.length < 8) hero.push(item);
+    const { results, degraded } = await this.#fanOut(targets, async (a) => {
+      if (typeof a.featuredShelves === 'function') {
+        const sections = await a.featuredShelves();
+        return {
+          adapter: a,
+          shelves: sections
+            .filter((s) => s.items.length > 0)
+            .map((s) => ({
+              id: s.id,
+              title: s.title,
+              items: s.items.map((item) => this.#toSummary(a, item)),
+            })),
+        };
       }
+      const items = await a.featured();
+      return {
+        adapter: a,
+        shelves:
+          items.length > 0
+            ? [
+                {
+                  id: a.id,
+                  title: a.label,
+                  items: items.map((item) => this.#toSummary(a, item)),
+                },
+              ]
+            : [],
+      };
+    });
+
+    const shelves = results.flatMap((r) => r.shelves);
+
+    // Prefer the first shelf (popular) for hero, then fill from the rest.
+    const hero: ComicSummary[] = [];
+    const seen = new Set<string>();
+    for (const shelf of shelves) {
+      for (const item of shelf.items) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        hero.push(item);
+        if (hero.length >= 8) break;
+      }
+      if (hero.length >= 8) break;
     }
 
     return { hero, shelves, degraded };

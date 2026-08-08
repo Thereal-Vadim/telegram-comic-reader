@@ -2,6 +2,11 @@
  * Generates a small CBZ library so the app can be run and tested without
  * anyone having to supply their own comics.
  *
+ * Dev/e2e only. Leave LOCAL_LIBRARY_DIR empty in normal Mini App runs so these
+ * placeholder series (Orbital Mechanics, Signal Lost, The Cartographer) do not
+ * appear on Home — the frontend also purges them from IndexedDB when the
+ * `local` adapter is not on the home feed.
+ *
  * Pages are drawn procedurally with sharp: a numbered panel grid, distinct
  * colour per chapter. That is enough to verify page ordering by eye and to
  * give the reader realistically sized images to decode, which a solid colour
