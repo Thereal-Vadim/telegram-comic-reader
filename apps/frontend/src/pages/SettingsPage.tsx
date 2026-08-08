@@ -5,11 +5,10 @@ import { ErrorState, Spinner } from '../components/states';
 import { useHaptics } from '../telegram/hooks';
 
 /**
- * Library status + com-x.life account connection.
+ * App settings + com-x.life account connection.
  *
  * Connecting an account opens a real browser session on the server (human
- * pacing). That session is reused for catalog browsing now and file downloads
- * later — you “go inside” once, then the Mini App can use the site.
+ * pacing). That session is reused for catalog browsing and offline downloads.
  */
 export function SettingsPage(): React.JSX.Element {
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
@@ -40,16 +39,16 @@ export function SettingsPage(): React.JSX.Element {
     void load();
   }, [load]);
 
-  if (loading && adapters.length === 0) return <Spinner label="Loading library" />;
+  if (loading && adapters.length === 0) return <Spinner label="Loading settings" />;
   if (error && adapters.length === 0) return <ErrorState error={error} onRetry={load} />;
 
   return (
     <div className="px-4 pb-24 pt-4">
       <header className="mb-6">
-        <h1 className="text-lg font-bold text-tg-text">Library</h1>
+        <h1 className="text-lg font-bold text-tg-text">Settings</h1>
         <p className="mt-1 text-sm text-tg-hint">
-          Connect the sources you want to read from. com-x.life needs your site
-          login so the app can browse and later download from your account.
+          Connect com-x.life and other sources. Downloaded issues live in the
+          Downloaded tab and work without the internet.
         </p>
       </header>
 

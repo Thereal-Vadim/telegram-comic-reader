@@ -90,8 +90,8 @@ function TabBar(): React.JSX.Element {
   const tabs = [
     { to: '/', label: 'Home' },
     { to: '/search', label: 'Search' },
-    { to: '/downloads', label: 'Downloads' },
-    { to: '/settings', label: 'Library' },
+    { to: '/downloads', label: 'Downloaded' },
+    { to: '/settings', label: 'Settings' },
   ] as const;
 
   return (
