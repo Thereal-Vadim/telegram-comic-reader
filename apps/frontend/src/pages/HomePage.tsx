@@ -11,7 +11,15 @@ import { isDemoSampleComic, purgeStaleLocalCatalog } from '../db/storage';
 import { useLibrary } from '../store/library';
 import { useHaptics } from '../telegram/hooks';
 
-const SHELF_VISIBLE = 16;
+const SHELF_VISIBLE = 24;
+
+type CatalogTabId = 'popular' | 'comics' | 'manga';
+
+const CATALOG_TABS: { id: CatalogTabId; label: string }[] = [
+  { id: 'popular', label: 'Сейчас популярно' },
+  { id: 'comics', label: 'Комиксы' },
+  { id: 'manga', label: 'Манга' },
+];
 
 interface ContinueItem {
   comic: ComicSummary;
@@ -21,10 +29,8 @@ interface ContinueItem {
 }
 
 /**
- * Home: Continue (3) → Favourites → New (Comics, then Manga).
- *
- * Continue and Favourites are local (progress / stars). The New shelves come
- * from the catalog feed, split by genre heuristics when the source tags manga.
+ * Home: Continue (3) → Favourites → catalog tabs
+ * (Сейчас популярно → Комиксы → Манга), matching com-x.life’s type switcher.
  */
 export function HomePage(): React.JSX.Element {
   const [feed, setFeed] = useState<HomeFeedResponse | null>(null);
@@ -33,10 +39,12 @@ export function HomePage(): React.JSX.Element {
   const [offlineFallback, setOfflineFallback] = useState(false);
   const [continueItems, setContinueItems] = useState<ContinueItem[]>([]);
   const [favoriteItems, setFavoriteItems] = useState<ComicSummary[]>([]);
+  const [catalogTab, setCatalogTab] = useState<CatalogTabId>('popular');
 
   const favorites = useLibrary((s) => s.favorites);
   const progress = useLibrary((s) => s.progress);
   const hydrated = useLibrary((s) => s.hydrated);
+  const { impact } = useHaptics();
 
   const load = useCallback(async () => {
     setError(null);
@@ -138,29 +146,19 @@ export function HomePage(): React.JSX.Element {
     };
   }, [hydrated, feed, favorites, progress]);
 
-  const catalogItems = useMemo(() => {
-    if (!feed) return [] as ComicSummary[];
-    const hideDemos = !feedHasLocalAdapter(feed);
-    const seen = new Set<string>();
-    const items: ComicSummary[] = [];
-    for (const comic of [...feed.hero, ...feed.shelves.flatMap((s) => s.items)]) {
-      if (hideDemos && isDemoSampleComic(comic)) continue;
-      if (seen.has(comic.id)) continue;
-      seen.add(comic.id);
-      items.push(comic);
-    }
-    return items;
-  }, [feed]);
+  const catalogTabs = useMemo(() => buildCatalogTabs(feed), [feed]);
 
-  const { comicsShelf, mangaShelf } = useMemo(() => {
-    const comics: ComicSummary[] = [];
-    const manga: ComicSummary[] = [];
-    for (const comic of catalogItems) {
-      if (looksLikeManga(comic)) manga.push(comic);
-      else comics.push(comic);
-    }
-    return { comicsShelf: comics, mangaShelf: manga };
-  }, [catalogItems]);
+  const availableTabs = useMemo(
+    () => CATALOG_TABS.filter((tab) => (catalogTabs[tab.id]?.length ?? 0) > 0),
+    [catalogTabs],
+  );
+
+  const activeTab: CatalogTabId =
+    availableTabs.some((t) => t.id === catalogTab)
+      ? catalogTab
+      : (availableTabs[0]?.id ?? 'popular');
+
+  const activeItems = catalogTabs[activeTab] ?? [];
 
   if (loading && !feed) {
     return <BootScreen title="Loading library" subtitle="Fetching popular comics…" />;
@@ -169,7 +167,7 @@ export function HomePage(): React.JSX.Element {
   if (!feed) return <EmptyState title="Nothing here yet" />;
 
   const hasLocal = continueItems.length > 0 || favoriteItems.length > 0;
-  const hasCatalog = comicsShelf.length > 0 || mangaShelf.length > 0;
+  const hasCatalog = availableTabs.length > 0;
   if (!hasLocal && !hasCatalog) {
     return (
       <EmptyState
@@ -206,21 +204,32 @@ export function HomePage(): React.JSX.Element {
         <CoverShelf title="Favourites" items={favoriteItems} />
       )}
 
-      {(comicsShelf.length > 0 || mangaShelf.length > 0) && (
+      {hasCatalog && (
         <section className="mt-8">
-          <div className="mb-1 px-4">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-tg-subtitle">
-              New
-            </h2>
-            <p className="mt-1 text-xs text-tg-hint">Fresh from the catalog</p>
+          <div className="no-scrollbar flex gap-1 overflow-x-auto px-4">
+            {availableTabs.map((tab) => {
+              const selected = tab.id === activeTab;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    impact('light');
+                    setCatalogTab(tab.id);
+                  }}
+                  className={
+                    selected
+                      ? 'shrink-0 rounded-lg bg-tg-button px-3 py-2 text-sm font-semibold text-tg-button-text'
+                      : 'shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-tg-hint'
+                  }
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
           </div>
 
-          {comicsShelf.length > 0 && (
-            <CoverShelf title="Comics" items={comicsShelf} nested />
-          )}
-          {mangaShelf.length > 0 && (
-            <CoverShelf title="Manga" items={mangaShelf} nested />
-          )}
+          <CoverShelf title="" items={activeItems} nested />
         </section>
       )}
     </div>
@@ -303,18 +312,20 @@ function CoverShelf({
   const visible = items.slice(0, SHELF_VISIBLE);
   return (
     <section className={nested ? 'mt-4' : 'mt-8'}>
-      <div className="mb-2 flex items-baseline justify-between px-4">
-        <h2
-          className={
-            nested
-              ? 'text-base font-semibold text-tg-text'
-              : 'text-sm font-semibold uppercase tracking-wide text-tg-subtitle'
-          }
-        >
-          {title}
-        </h2>
-        <span className="text-xs text-tg-hint">{items.length}</span>
-      </div>
+      {title ? (
+        <div className="mb-2 flex items-baseline justify-between px-4">
+          <h2
+            className={
+              nested
+                ? 'text-base font-semibold text-tg-text'
+                : 'text-sm font-semibold uppercase tracking-wide text-tg-subtitle'
+            }
+          >
+            {title}
+          </h2>
+          <span className="text-xs text-tg-hint">{items.length}</span>
+        </div>
+      ) : null}
 
       <div className="no-scrollbar flex gap-3 overflow-x-auto px-4">
         {visible.map((comic) => (
@@ -460,4 +471,60 @@ function estimateComicPercent(
 function looksLikeManga(comic: ComicSummary): boolean {
   const haystack = [...comic.genres, comic.title, ...comic.authors].join(' ').toLowerCase();
   return /манг|manga|манхва|manhwa|маньхуа|manhua|манга/.test(haystack);
+}
+
+function dedupeComics(items: ComicSummary[]): ComicSummary[] {
+  const seen = new Set<string>();
+  const out: ComicSummary[] = [];
+  for (const comic of items) {
+    if (isDemoSampleComic(comic) || seen.has(comic.id)) continue;
+    seen.add(comic.id);
+    out.push(comic);
+  }
+  return out;
+}
+
+/**
+ * Prefer backend shelves (comx-popular / comx-comics / comx-manga). Fall back to
+ * a title/genre heuristic when only a mixed shelf is available (local/OPDS/cache).
+ */
+function buildCatalogTabs(
+  feed: HomeFeedResponse | null,
+): Record<CatalogTabId, ComicSummary[]> {
+  const empty: Record<CatalogTabId, ComicSummary[]> = {
+    popular: [],
+    comics: [],
+    manga: [],
+  };
+  if (!feed) return empty;
+
+  const byId = new Map(feed.shelves.map((s) => [s.id, s.items]));
+  const popular = dedupeComics(
+    byId.get('comx-popular') ??
+      feed.shelves.find((s) => /популяр|popular|com-x|cached|updating/i.test(s.title))?.items ??
+      feed.hero,
+  );
+  const comics = dedupeComics(byId.get('comx-comics') ?? []);
+  const manga = dedupeComics(byId.get('comx-manga') ?? []);
+
+  if (comics.length > 0 || manga.length > 0) {
+    return {
+      popular: popular.length > 0 ? popular : dedupeComics([...comics, ...manga]),
+      comics,
+      manga,
+    };
+  }
+
+  // Mixed single shelf — approximate the three tabs client-side.
+  const mixed = dedupeComics([
+    ...feed.hero,
+    ...feed.shelves.flatMap((s) => s.items),
+  ]);
+  const mangaGuess = mixed.filter(looksLikeManga);
+  const comicsGuess = mixed.filter((c) => !looksLikeManga(c));
+  return {
+    popular: mixed,
+    comics: comicsGuess,
+    manga: mangaGuess,
+  };
 }

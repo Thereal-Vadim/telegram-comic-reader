@@ -57,6 +57,13 @@ export interface SearchArgs {
   readonly genre: string | undefined;
 }
 
+/** One labelled row on the home feed (popular / comics / manga, …). */
+export interface FeaturedShelf {
+  readonly id: string;
+  readonly title: string;
+  readonly items: LocalComicSummary[];
+}
+
 export interface ProviderAdapter {
   readonly id: string;
   readonly label: string;
@@ -74,6 +81,11 @@ export interface ProviderAdapter {
   search(args: SearchArgs): Promise<{ items: LocalComicSummary[]; hasMore: boolean }>;
   /** Editorial or recently-updated rows for the home feed. */
   featured(): Promise<LocalComicSummary[]>;
+  /**
+   * Optional multi-shelf home feed (e.g. popular / comics / manga).
+   * When present, {@link AdapterRegistry.homeFeed} prefers this over {@link featured}.
+   */
+  featuredShelves?(): Promise<FeaturedShelf[]>;
   getComic(id: string): Promise<LocalComicDetail>;
   getChapters(comicId: string): Promise<LocalChapter[]>;
   getPages(chapterId: string): Promise<LocalPageRef[]>;

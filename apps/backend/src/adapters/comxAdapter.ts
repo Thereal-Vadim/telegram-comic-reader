@@ -10,6 +10,7 @@ import {
 } from './comxSession.js';
 import type { GuardOptions } from '../net/ssrf.js';
 import type {
+  FeaturedShelf,
   ImageSource,
   LocalChapter,
   LocalComicDetail,
@@ -18,6 +19,23 @@ import type {
   ProviderAdapter,
   SearchArgs,
 } from './types.js';
+
+/** Western / publisher comics sections interleaved for the Комиксы tab. */
+const COMX_COMICS_URLS = [
+  `${COMX_BASE_URL}/comix-read/marvel-read/`,
+  `${COMX_BASE_URL}/comix-read/dc-comics-read/`,
+  `${COMX_BASE_URL}/comix-read/image-read/`,
+  `${COMX_BASE_URL}/comix-read/other-read/`,
+] as const;
+
+/** Manga + manhwa + manhua sections for the Манга tab. */
+const COMX_MANGA_URLS = [
+  `${COMX_BASE_URL}/comix-read/manga-2025-read/`,
+  `${COMX_BASE_URL}/comix-read/manhwa-read/`,
+  `${COMX_BASE_URL}/comix-read/manhua-read/`,
+] as const;
+
+const HOME_SHELF_LIMIT = 24;
 
 /**
  * Operator-configured adapter for com-x.life.
@@ -848,8 +866,54 @@ export class ComxAdapter implements ProviderAdapter {
   }
 
   async featured(): Promise<LocalComicSummary[]> {
+    // Default `/comix-read/` catalog (trailing slash matters for DLE page 1).
     const result = await this.getCatalog(1);
-    return result.items.slice(0, 20).map((i) => this.#toSummary(i));
+    return result.items.slice(0, HOME_SHELF_LIMIT).map((i) => this.#toSummary(i));
+  }
+
+  /**
+   * Home tabs matching com-x.life’s ВСЕ / КОМИКСЫ / МАНГА, ordered as:
+   * Сейчас популярно → Комиксы → Манга.
+   */
+  async featuredShelves(): Promise<FeaturedShelf[]> {
+    const [popular, comics, manga] = await Promise.all([
+      this.featured(),
+      this.#mergeCategoryCatalogs(COMX_COMICS_URLS, HOME_SHELF_LIMIT),
+      this.#mergeCategoryCatalogs(COMX_MANGA_URLS, HOME_SHELF_LIMIT),
+    ]);
+
+    return [
+      { id: 'comx-popular', title: 'Сейчас популярно', items: popular },
+      { id: 'comx-comics', title: 'Комиксы', items: comics },
+      { id: 'comx-manga', title: 'Манга', items: manga },
+    ].filter((shelf) => shelf.items.length > 0);
+  }
+
+  /** Interleave first pages of several category URLs, de-duplicating by id. */
+  async #mergeCategoryCatalogs(
+    urls: readonly string[],
+    limit: number,
+  ): Promise<LocalComicSummary[]> {
+    const settled = await Promise.allSettled(urls.map((url) => this.getCatalog(1, url)));
+    const lists = settled
+      .filter((r): r is PromiseFulfilledResult<CatalogResponse> => r.status === 'fulfilled')
+      .map((r) => r.value.items.map((i) => this.#toSummary(i)));
+
+    const seen = new Set<string>();
+    const out: LocalComicSummary[] = [];
+    for (let row = 0; out.length < limit; row++) {
+      let progressed = false;
+      for (const list of lists) {
+        const item = list[row];
+        if (!item || seen.has(item.id)) continue;
+        seen.add(item.id);
+        out.push(item);
+        progressed = true;
+        if (out.length >= limit) break;
+      }
+      if (!progressed) break;
+    }
+    return out;
   }
 
   async getComic(id: string): Promise<LocalComicDetail> {
