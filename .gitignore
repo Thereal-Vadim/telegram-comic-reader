@@ -6,9 +6,19 @@ coverage/
 *.log
 .DS_Store
 
+# Secrets / local operator config (keep .env.example tracked)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# Generated API native deps (placeholder + package.json are tracked)
+/api/node_modules/
+/api/package-lock.json
+/api/[[...path]].mjs.map
 
 # Backend runtime data: transcoded image cache and the local comic library
 apps/backend/.cache/
@@ -22,3 +32,5 @@ playwright-report/
 test-results/
 blob-report/
 .playwright/
+.vercel
+.env*

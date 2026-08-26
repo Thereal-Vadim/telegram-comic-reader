@@ -4,15 +4,18 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": "22.x"
   },
   "scripts": {
     "build": "pnpm -r build",
+    "build:vercel": "pnpm --filter @comic/frontend build && pnpm --filter @comic/backend exec tsx scripts/bundle-api.ts && npm install --prefix api --omit=dev",
     "dev": "pnpm -r --parallel dev",
+    "tunnel": "node scripts/telegram-tunnel.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "eslint ."
   },
+  "packageManager": "pnpm@10.15.1",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.8.0",

@@ -2,6 +2,7 @@ import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import zlib from 'node:zlib';
 import { AppError } from '@comic/shared';
 
 /**
@@ -56,6 +57,27 @@ export function isBlockedAddress(ip: string): boolean {
   if (family === 4) return isBlockedIPv4(ip);
   if (family === 6) return isBlockedIPv6(ip);
   return true; // not an IP literal at all - refuse
+}
+
+/**
+ * Decode gzip / deflate / brotli bodies. com-x.life gzips HTML even when we
+ * do not send Accept-Encoding; treating that as markup yields an empty catalog.
+ */
+export function decodeContentEncoding(
+  body: Buffer,
+  encoding: string | string[] | undefined,
+): Buffer {
+  const enc = (Array.isArray(encoding) ? encoding[0] : encoding)?.toLowerCase() ?? '';
+  try {
+    if (enc.includes('gzip') || (body.length >= 2 && body[0] === 0x1f && body[1] === 0x8b)) {
+      return zlib.gunzipSync(body);
+    }
+    if (enc.includes('deflate')) return zlib.inflateSync(body);
+    if (enc.includes('br')) return zlib.brotliDecompressSync(body);
+  } catch {
+    throw new AppError('UPSTREAM_MALFORMED', 'upstream compressed body could not be decoded');
+  }
+  return body;
 }
 
 export interface GuardOptions {
@@ -234,8 +256,16 @@ export async function safeRequest(
         });
         res.on('end', () => {
           const contentType = res.headers['content-type'];
+          const raw = Buffer.concat(chunks);
+          let body: Buffer;
+          try {
+            body = decodeContentEncoding(raw, res.headers['content-encoding']);
+          } catch (err) {
+            reject(err);
+            return;
+          }
           resolve({
-            body: Buffer.concat(chunks),
+            body,
             contentType: typeof contentType === 'string' ? contentType : null,
             statusCode,
             headers: res.headers,

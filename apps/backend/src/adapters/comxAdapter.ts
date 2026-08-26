@@ -468,7 +468,44 @@ export class ComxAdapter implements ProviderAdapter {
       });
     };
 
-    // Current com-x.life catalog cards (2026 skin).
+    // Current com-x.life catalog cards (2026 skin): poster grid + "latest" list.
+    $('a.poster[href]').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href') || '';
+      const title =
+        $el.find('.poster__title').first().text().trim() || $el.find('img').attr('alt') || '';
+      const $img = $el.find('img').first();
+      const coverSrc =
+        $img.attr('data-src') || $img.attr('data-original') || $img.attr('src') || '';
+      const yearMatch = $el.find('.poster__desc').text().match(/\b(19|20)\d{2}\b/);
+      const rating = $el.find('.poster__label--rate').text().replace(/[^\d.]/g, '').trim();
+      pushItem({
+        title,
+        href,
+        coverSrc,
+        ...(yearMatch?.[0] ? { year: yearMatch[0] } : {}),
+        ...(rating ? { rating } : {}),
+      });
+    });
+
+    $('li.latest.grid-item, li.latest').each((_, el) => {
+      const $el = $(el);
+      const $link = $el.find('.latest__title a[href], a.latest__img[href]').first();
+      const href = $link.attr('href') || $el.find('a[href*=".html"]').first().attr('href') || '';
+      const title = $el.find('.latest__title a').first().text().trim() || $link.attr('alt') || '';
+      const $img = $el.find('img').first();
+      const coverSrc =
+        $img.attr('data-src') || $img.attr('data-original') || $img.attr('src') || '';
+      const latestChapter = $el.find('.latest__chapter').text().trim();
+      pushItem({
+        title,
+        href,
+        coverSrc,
+        ...(latestChapter ? { latestChapter } : {}),
+      });
+    });
+
+    // Previous catalog cards (`#dle-content .readed`).
     $('#dle-content .readed.short, #dle-content .readed, .readed.short').each((_, el) => {
       const $el = $(el);
       const $link = $el.find('.readed__title a, h3 a, a.readed__img').first();
@@ -848,6 +885,12 @@ export class ComxAdapter implements ProviderAdapter {
   }
 
   async featured(): Promise<LocalComicSummary[]> {
+    // Home page is the live "сейчас читают / популярные" grid. `/comix-read/`
+    // is the paginated catalog and may still be gated; fall back to it.
+    const home = this.parseCatalogPage(await this.#fetchHtml(this.#baseUrl), 1);
+    if (home.items.length > 0) {
+      return home.items.slice(0, 20).map((i) => this.#toSummary(i));
+    }
     const result = await this.getCatalog(1);
     return result.items.slice(0, 20).map((i) => this.#toSummary(i));
   }

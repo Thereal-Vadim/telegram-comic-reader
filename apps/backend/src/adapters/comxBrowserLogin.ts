@@ -25,6 +25,11 @@ const BASE_URL = 'https://com-x.life';
 
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  `${process.env.LOCALAPPDATA ?? ''}\\Google\\Chrome\\Application\\chrome.exe`,
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   '/usr/local/bin/google-chrome',
   '/usr/bin/google-chrome',
   '/usr/bin/chromium',
@@ -125,8 +130,31 @@ export async function loginComxWithBrowser(
     await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle2', timeout: 90_000 }).catch(async () => {
       await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
     });
-    // Anti-bot / gate paint.
+    // Anti-bot / gate paint. The homepage catalog is public; the login form
+    // lives in a closed modal (`Войти`) and is not visible until opened.
     await humanPause(2500, 4000);
+
+    const loginVisible = await page
+      .$('input[name="login_name"]')
+      .then(async (h) => {
+        if (!h) return false;
+        return h.evaluate((el) => {
+          const node = el as unknown as InPageEl & { getBoundingClientRect?: () => { width: number; height: number } };
+          const box = node.getBoundingClientRect?.();
+          return Boolean(box && box.width > 0 && box.height > 0 && node.style.display !== 'none');
+        });
+      })
+      .catch(() => false);
+
+    if (!loginVisible) {
+      await page.evaluate(() => {
+        const doc = (globalThis as unknown as { document: InPageDoc }).document;
+        const nodes = Array.from(doc.querySelectorAll('a, button, span, div'));
+        const enter = nodes.find((el) => /^войти$/i.test((el.textContent || '').trim()));
+        if (enter) enter.click();
+      });
+      await humanPause(800, 1500);
+    }
 
     // Password form may be hidden behind the magic-link primary panel.
     const altClicked = await page.evaluate(() => {
@@ -155,7 +183,7 @@ export async function loginComxWithBrowser(
     });
 
     await page.waitForSelector('input[name="login_name"]', {
-      timeout: 20_000,
+      timeout: 30_000,
       visible: true,
     });
     await humanPause(600, 1200);

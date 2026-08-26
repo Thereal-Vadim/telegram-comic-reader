@@ -92,11 +92,18 @@ function isChallengeHtml(html: string): boolean {
 }
 
 function isLoginWallHtml(html: string): boolean {
-  return (
-    html.includes('name="login_name"') &&
-    html.includes('name="login_password"') &&
-    (html.includes('Com-X.life — вход') || html.includes('sandev-auth-magic'))
-  );
+  const hasForm =
+    html.includes('name="login_name"') && html.includes('name="login_password"');
+  if (!hasForm) return false;
+  // The public catalog embeds a login modal. Real gates have no comic cards.
+  if (
+    html.includes('class="poster') ||
+    html.includes('readed__title') ||
+    html.includes('latest__title')
+  ) {
+    return false;
+  }
+  return html.includes('Com-X.life — вход') || html.includes('sandev-auth-magic');
 }
 
 const sleep = (ms: number): Promise<void> =>
@@ -208,12 +215,6 @@ export class ComxSession {
   }
 
   async request(url: string, init: ComxFetchInit = {}): Promise<SafeRequestResult> {
-    if (!init.skipAuth && !this.#loginOk) {
-      await this.ensureAuthenticated();
-      // Small pause after auth before the first content hit.
-      await sleep(800 + Math.floor(Math.random() * 700));
-    }
-
     const maxBytes = init.maxBytes ?? this.#maxBytes;
     let current = url;
     let method: 'GET' | 'POST' = init.method ?? 'GET';
@@ -423,4 +424,4 @@ export class ComxSession {
   }
 }
 
-export { BASE_URL as COMX_BASE_URL, BROWSER_HEADERS as COMX_BROWSER_HEADERS };
+export { BASE_URL as COMX_BASE_URL, BROWSER_HEADERS as COMX_BROWSER_HEADERS, isLoginWallHtml };

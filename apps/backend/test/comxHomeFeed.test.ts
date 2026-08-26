@@ -24,7 +24,12 @@ function catalogHtml(): string {
 describe('Home feed from comx featured shelf', () => {
   it('surfaces five parsed comics on hero + com-x.life shelf', async () => {
     const adapter = new ComxAdapter(async (url) => {
-      if (url.includes('comix-read') || url.includes('/comix/')) {
+      if (
+        url.includes('comix-read') ||
+        url.includes('/comix/') ||
+        url === 'https://com-x.life' ||
+        url === 'https://com-x.life/'
+      ) {
         return { body: Buffer.from(catalogHtml()), contentType: 'text/html' };
       }
       throw new Error(`unexpected ${url}`);

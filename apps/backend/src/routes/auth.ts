@@ -27,11 +27,19 @@ export function registerAuthRoutes(app: FastifyInstance, cfg: Config): void {
     let user: TelegramUser;
 
     if (cfg.telegramBotToken) {
-      const verified = verifyInitData(parsed.data.initData, {
-        botToken: cfg.telegramBotToken,
-        maxAgeSeconds: cfg.initDataMaxAgeSeconds,
-      });
-      user = verified.user;
+      // Browser `pnpm dev` sends the literal "dev" because there is no WebApp
+      // initData. Keep that path in development so local testing still works
+      // when the bot token is present for Mini App / com-x use.
+      if (cfg.env === 'development' && parsed.data.initData === 'dev') {
+        app.log.warn('browser has no Telegram initData - issuing a development session');
+        user = { id: 0, firstName: 'Dev', username: 'dev' };
+      } else {
+        const verified = verifyInitData(parsed.data.initData, {
+          botToken: cfg.telegramBotToken,
+          maxAgeSeconds: cfg.initDataMaxAgeSeconds,
+        });
+        user = verified.user;
+      }
     } else if (cfg.insecureDevAuth) {
       // Development only. loadConfig refuses to reach this state in production.
       app.log.warn('TELEGRAM_BOT_TOKEN is unset - issuing an unverified development session');

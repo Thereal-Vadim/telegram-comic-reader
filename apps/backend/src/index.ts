@@ -1,4 +1,13 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { loadEnvFile } from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { buildServer } from './server.js';
+
+const envFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.env');
+if (existsSync(envFile)) {
+  loadEnvFile(envFile);
+}
 
 /**
  * Process entrypoint. Kept separate from `buildServer` so tests can construct

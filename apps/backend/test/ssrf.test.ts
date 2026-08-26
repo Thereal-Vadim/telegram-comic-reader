@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isBlockedAddress, isHostAllowed, resolveSafeTarget } from '../src/net/ssrf.js';
+import zlib from 'node:zlib';
+import { decodeContentEncoding, isBlockedAddress, isHostAllowed, resolveSafeTarget } from '../src/net/ssrf.js';
 import { AppError } from '@comic/shared';
 
 /**
@@ -110,5 +111,24 @@ describe('resolveSafeTarget', () => {
 
   it('rejects unparseable input', async () => {
     await expect(resolveSafeTarget('not a url', guard)).rejects.toBeInstanceOf(AppError);
+  });
+});
+
+describe('decodeContentEncoding', () => {
+  it('gunzips bodies that arrive with content-encoding: gzip', () => {
+    const html = '<html><title>Com-X</title></html>';
+    const gz = zlib.gzipSync(html);
+    expect(decodeContentEncoding(gz, 'gzip').toString('utf8')).toBe(html);
+  });
+
+  it('gunzips bodies that look like gzip even without the header', () => {
+    const html = '<a class="poster" href="/1-x.html">x</a>';
+    const gz = zlib.gzipSync(html);
+    expect(decodeContentEncoding(gz, undefined).toString('utf8')).toBe(html);
+  });
+
+  it('leaves plain HTML alone', () => {
+    const html = Buffer.from('<html>plain</html>');
+    expect(decodeContentEncoding(html, undefined).equals(html)).toBe(true);
   });
 });

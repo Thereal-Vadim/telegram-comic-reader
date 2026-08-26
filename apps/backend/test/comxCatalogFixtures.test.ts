@@ -142,13 +142,12 @@ describe('ComxAdapter five-comic catalog + detail parse', () => {
 
   it('featured() returns the five catalog comics for the home shelf', async () => {
     const adapter = new ComxAdapter(async (url) => {
-      if (url.includes('/comix-read/')) {
+      if (url.includes('/comix-read/') || url === 'https://com-x.life' || url === 'https://com-x.life/') {
         return { body: Buffer.from(catalogHtml()), contentType: 'text/html' };
       }
       throw new Error(`unexpected ${url}`);
     });
 
-    // Override getCatalog path used by featured.
     const items = await adapter.featured();
     expect(items.length).toBe(5);
     expect(items.map((i) => i.title)).toEqual(FIVE_COMICS.map((c) => c.title));
@@ -158,5 +157,32 @@ describe('ComxAdapter five-comic catalog + detail parse', () => {
         expect(item.cover.url.startsWith('http')).toBe(true);
       }
     }
+  });
+
+  it('parses 2026 poster-grid catalog cards from the public home page', () => {
+    const adapter = new ComxAdapter(async () => ({
+      body: Buffer.from(''),
+      contentType: 'text/html',
+    }));
+    const html = `
+      <a class="poster grid-item has-overlay" href="/12824-mladshij-syn-mechnika.html">
+        <div class="poster__img"><img src="/uploads/mini/a.webp" alt="alt"></div>
+        <div class="poster__desc">
+          <p class="poster__title line-clamp">The Youngest Son of a Master Swordsman / Младший сын мечника</p>
+          <ul class="poster__meta"><li>Kakao</li><li>2022</li></ul>
+        </div>
+      </a>
+      <li class="latest grid-item">
+        <a href="/31633-dorogoj.html" class="latest__img"><img src="/uploads/mini/b.webp" alt="Дорогой"></a>
+        <p class="latest__title"><a href="/31633-dorogoj.html">Dear / Дорогой</a></p>
+        <p class="latest__chapter">1 - 61</p>
+      </li>`;
+    const parsed = adapter.parseCatalogPage(html, 1);
+    expect(parsed.items.map((i) => i.title)).toEqual([
+      'The Youngest Son of a Master Swordsman / Младший сын мечника',
+      'Dear / Дорогой',
+    ]);
+    expect(parsed.items[0]!.coverUrl).toContain('/uploads/mini/a.webp');
+    expect(parsed.items[1]!.latestChapter).toBe('1 - 61');
   });
 });
